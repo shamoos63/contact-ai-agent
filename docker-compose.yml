@@ -1,0 +1,41 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # NVIDIA GPU: install the NVIDIA Container Toolkit and uncomment below.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Optional: public HTTPS address for the Facebook/Instagram webhooks.
+  # Start with: docker compose --profile tunnel up -d   (then see the logs for the URL)
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://app:3000
+    depends_on:
+      - app
+
+volumes:
+  ollama:
