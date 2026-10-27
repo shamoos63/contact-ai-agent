@@ -1,0 +1,12 @@
+# Lets Ollama use an NVIDIA graphics card, which makes replies many times faster.
+# Needs a recent NVIDIA driver (and on Windows, Docker Desktop with the WSL 2 backend).
+# Start with:  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

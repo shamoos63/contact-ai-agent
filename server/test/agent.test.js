@@ -55,7 +55,7 @@ test('knowledge is indexed and used in answers', async () => {
 
 test('redirect rules and language rule go into the system prompt', () => {
   mods.db.prepare('INSERT INTO redirects (name, when_text, value) VALUES (?, ?, ?)').run('Sales', 'they want to buy', '+971500000000');
-  const prompt = mods.agent.buildSystemPrompt([]);
+  const prompt = mods.agent.buildSystemPrompt([], 'Arabic');
   assert.match(prompt, /\+971500000000/);
   assert.match(prompt, /Arabic/);
 });
@@ -117,4 +117,56 @@ test('model download reports size and progress', async () => {
   assert.equal(d.completed, 1010);
   assert.equal(s.installed[0].size, 4683087332);
   assert.ok(s.modelsPath);
+});
+
+test('email forwarding rules match by keyword and by AI, and forward with attachments', async () => {
+  const rules = await import('../src/channels/email-rules.js');
+  const ins = mods.db.prepare(
+    `INSERT INTO email_rules (name, match_type, match_text, match_field, forward_to, ai_reply) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  ins.run('Jobs', 'keywords', 'cv, وظيفة', 'any', 'hr@example.com', 0);
+  ins.run('Billing', 'ai', 'questions about invoices or payments', 'any', 'accounts@example.com, boss@example.com', 1);
+
+  const jobs = await rules.matchRules({ accountId: 1, from: 'a@b.com', subject: 'طلب وظيفة', text: 'مرفق السيرة الذاتية' });
+  assert.deepEqual(jobs.map((r) => r.name), ['Jobs']);
+  const billing = await rules.matchRules({ accountId: 1, from: 'a@b.com', subject: 'Question', text: 'Where is my invoice?' });
+  assert.deepEqual(billing.map((r) => r.name), ['Billing']);
+  const none = await rules.matchRules({ accountId: 1, from: 'a@b.com', subject: 'Hello', text: 'Are you open today?' });
+  assert.equal(none.length, 0);
+
+  const sent = [];
+  const transport = { sendMail: async (m) => sent.push(m) };
+  const parsed = { subject: 'Question', text: 'Where is my invoice?', date: new Date(), to: { text: 'shop@x.com' }, attachments: [{ filename: 'a.pdf', content: Buffer.from('x'), contentType: 'application/pdf' }] };
+  const results = await rules.forward({ transport, account: { name: 'Shop', email: 'shop@x.com' }, parsed, original: { from: 'a@b.com', fromName: 'Ali' }, rules: billing });
+  assert.equal(results[0].error, undefined);
+  assert.deepEqual(sent[0].to, ['accounts@example.com', 'boss@example.com']);
+  assert.equal(sent[0].subject, 'Fwd: Question');
+  assert.equal(sent[0].replyTo, 'a@b.com');
+  assert.equal(sent[0].attachments[0].filename, 'a.pdf');
+  assert.match(sent[0].text, /Forwarded message[\s\S]*Ali <a@b.com>[\s\S]*Where is my invoice/);
+  assert.equal(rules.validateRule({ name: 'x', match_text: 'y', forward_to: 'not-an-email' }), 'Add at least one valid email address to forward to');
+});
+
+test('team notes are shown in the conversation but not sent to the AI', async () => {
+  const conv = mods.inbox.listConversations({ channel: 'telegram' })[0];
+  mods.inbox.addNote(conv.id, 'Forwarded to hr@example.com');
+  const msgs = mods.inbox.listMessages(conv.id);
+  assert.equal(msgs.at(-1).direction, 'note');
+  const before = mock.calls.length;
+  await mods.agent.generateReply(conv.id);
+  const chatCall = mock.calls.slice(before).find((c) => c.path === '/api/chat');
+  assert.ok(!chatCall.data.messages.some((m) => m.content.includes('Forwarded to hr@')));
+  assert.equal(chatCall.data.keep_alive, '24h');
+});
+
+test('replies stay in the customer language and Chinese drift is retried', async () => {
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: 'مرحبا، كم السعر؟' }]), 'Arabic');
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: 'مرحبا' }, { role: 'assistant', content: 'أهلا' }, { role: 'user', content: '👍' }]), 'Arabic');
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: 'hi' }]), 'English');
+  const { reply, language } = await mods.agent.answer([{ role: 'user', content: 'What is TopTech?' }]);
+  assert.equal(language, 'English');
+  assert.equal(reply, 'TopTech is our shop for the latest tech products.');
+  const last = mock.calls.filter((c) => c.path === '/api/chat').at(-2);
+  assert.match(last.data.messages[0].content, /reply in English only/);
+  assert.match(last.data.messages.at(-1).content, /in English only/);
 });

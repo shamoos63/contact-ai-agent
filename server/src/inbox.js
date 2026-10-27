@@ -59,19 +59,29 @@ function insertMessage({ conversationId, direction, sender, text, externalId, me
 const pendingReplies = new Map();
 
 // Called by every channel when a customer message arrives.
-export function handleIncoming({ channel, accountId, externalId, name, handle, subject, text, messageId, meta, convMeta }) {
-  if (!text?.trim()) return;
+// Returns the conversation id, or null when the message was empty or already stored.
+export function handleIncoming({ channel, accountId, externalId, name, handle, subject, text, messageId, meta, convMeta, autoReply = true }) {
+  if (!text?.trim()) return null;
   if (messageId && db.prepare(
     `SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conversation_id
-     WHERE c.channel = ? AND m.external_id = ? AND m.direction = 'in'`).get(channel, String(messageId))) return;
+     WHERE c.channel = ? AND m.external_id = ? AND m.direction = 'in'`).get(channel, String(messageId))) return null;
 
   const conversationId = upsertConversation({ channel, accountId, externalId, name, handle, subject, meta: convMeta });
   insertMessage({ conversationId, direction: 'in', sender: 'customer', text: text.trim(), externalId: messageId, meta });
-  scheduleAutoReply(conversationId);
+  if (autoReply) scheduleAutoReply(conversationId);
+  return conversationId;
+}
+
+// A note in the conversation for the team (e.g. "forwarded to …"). Never sent to the customer.
+export function addNote(conversationId, text, meta) {
+  const info = db
+    .prepare("INSERT INTO messages (conversation_id, direction, sender, text, meta) VALUES (?, 'note', 'system', ?, ?)")
+    .run(conversationId, text, JSON.stringify(meta || {}));
+  emit('message', db.prepare('SELECT * FROM messages WHERE id = ?').get(info.lastInsertRowid));
 }
 
 // Wait a few seconds so several quick messages get a single combined answer.
-function scheduleAutoReply(conversationId) {
+export function scheduleAutoReply(conversationId) {
   const conv = conversationRow(conversationId);
   if (!getSetting('auto_reply') || !conv.auto_reply) return;
   clearTimeout(pendingReplies.get(conversationId));

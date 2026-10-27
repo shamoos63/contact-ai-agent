@@ -2,7 +2,8 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 import { db } from '../db.js';
-import { handleIncoming, registerSender } from '../inbox.js';
+import { handleIncoming, registerSender, addNote, scheduleAutoReply } from '../inbox.js';
+import { matchRules, forward } from './email-rules.js';
 
 const clients = new Map(); // account id -> { client, stopped, status, error }
 let notify = () => {};
@@ -61,7 +62,7 @@ async function processMessage(account, msg) {
   const sender = parsed.from.value[0];
   const text = stripQuoted(parsed.text || '') || (parsed.text || '').trim();
   const references = [].concat(parsed.references || []);
-  handleIncoming({
+  const conversationId = handleIncoming({
     channel: 'email',
     accountId: account.id,
     externalId: sender.address.toLowerCase(),
@@ -76,7 +77,35 @@ async function processMessage(account, msg) {
       references: [...references, parsed.messageId].filter(Boolean).slice(-10),
       lastSubject: parsed.subject,
     },
+    autoReply: false,
   });
+  if (!conversationId) return;
+  // Forwarding may ask the AI, which can take a while, so don't hold up the next emails.
+  applyForwarding(account, parsed, sender, text, conversationId).catch((err) =>
+    console.error(`[email:${account.email}] Forwarding failed:`, err.message),
+  );
+}
+
+async function applyForwarding(account, parsed, sender, text, conversationId) {
+  const original = { accountId: account.id, from: sender.address, fromName: sender.name, subject: parsed.subject, text };
+  let rules = [];
+  try {
+    rules = await matchRules(original);
+  } catch (err) {
+    addNote(conversationId, `Could not check forwarding rules: ${err.message}`);
+  }
+  if (rules.length) {
+    const results = await forward({ transport: transport(account), account, parsed, original, rules });
+    for (const r of results) {
+      addNote(
+        conversationId,
+        r.error ? `Forwarding to ${r.to.join(', ')} failed (rule "${r.rule.name}"): ${r.error}` : `Forwarded to ${r.to.join(', ')} (rule "${r.rule.name}")`,
+        { rule: r.rule.id },
+      );
+    }
+  }
+  // The AI still answers unless one of the matching rules says this email is for the team only.
+  if (rules.every((r) => r.ai_reply)) scheduleAutoReply(conversationId);
 }
 
 async function fetchNew(account, client) {

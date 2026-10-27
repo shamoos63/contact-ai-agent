@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu } from 'lucide-react';
+import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge } from 'lucide-react';
 import { api, formatBytes } from '../api.js';
 import { useEngine } from '../useEngine.js';
 import { PageHeader, Pill, DownloadProgress } from '../components/ui.jsx';
@@ -65,6 +65,8 @@ export default function Engine() {
           <span className="muted small">{engine.installed.length} model{engine.installed.length === 1 ? '' : 's'} installed</span>
         </div>
       </div>
+
+      {engine.online && <SpeedCard engine={engine} chatModel={settings.chat_model} />}
 
       {activeDownloads.length > 0 && (
         <section className="card">
@@ -173,6 +175,54 @@ function FilesCard({ path }) {
           <code>%USERPROFILE%\.ollama\models</code> on Windows or <code>~/.ollama/models</code> on Mac and Linux.
         </p>
       </div>
+    </section>
+  );
+}
+
+const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+function SpeedCard({ engine, chatModel }) {
+  const chat = engine.loaded?.find((m) => m.name === chatModel || m.name === `${chatModel}:latest`);
+  const last = engine.timings?.[0];
+  const where = !chat ? null : chat.gpuPercent >= 90 ? ['ok', 'Graphics card (GPU)'] : chat.gpuPercent > 0 ? ['warn', `Partly on GPU (${chat.gpuPercent}%)`] : ['error', 'Processor only (CPU), slow'];
+  const tips = [];
+  if (chat && chat.gpuPercent < 90) {
+    tips.push('The model is running on the processor. A graphics card makes replies 5 to 20 times faster. See "Making replies faster" in the README: on Windows the easiest way is to install the Ollama app directly, which uses your NVIDIA or AMD card automatically.');
+  }
+  if (last && last.loadMs > 10000) tips.push(`Loading the model took ${secs(last.loadMs)}. That happens once; the model now stays in memory for 24 hours between messages.`);
+  if (last && last.tokensPerSecond && last.tokensPerSecond < 8) tips.push(`The model writes ${last.tokensPerSecond} tokens (word pieces) per second. A smaller model like qwen2.5:3b is about twice as fast, with simpler answers.`);
+  return (
+    <section className="card">
+      <h3><Gauge size={16} /> Speed</h3>
+      <div className="list">
+        <div className="list-row">
+          <span className="grow">Chat model running on</span>
+          {where ? <span className={where[0]}>{where[1]}</span> : <span className="muted">Not loaded yet (loads with the first message)</span>}
+        </div>
+        {last && (
+          <div className="list-row">
+            <span className="grow">Last reply took</span>
+            <strong>{secs(last.totalMs)}</strong>
+          </div>
+        )}
+      </div>
+      {engine.timings?.length > 0 && (
+        <table className="table flat timings">
+          <thead><tr><th>When</th><th>Total</th><th>Loading model</th><th>Reading question</th><th>Writing answer</th></tr></thead>
+          <tbody>
+            {engine.timings.slice(0, 5).map((t) => (
+              <tr key={t.at}>
+                <td className="muted small">{new Date(t.at).toLocaleTimeString()}</td>
+                <td><strong>{secs(t.totalMs)}</strong></td>
+                <td>{secs(t.loadMs)}</td>
+                <td>{secs(t.promptMs)} <span className="muted small">({t.promptTokens} tokens)</span></td>
+                <td>{secs(t.outputMs)} <span className="muted small">({t.tokensPerSecond}/s)</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {tips.map((t) => <div key={t} className="alert warn small">{t}</div>)}
     </section>
   );
 }

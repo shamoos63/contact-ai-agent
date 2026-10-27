@@ -24,14 +24,39 @@ function enqueue(fn) {
   return run;
 }
 
+// Keep models in memory between messages. Ollama unloads them after 5 idle minutes by default,
+// and reloading several GB from disk is what makes the first reply after a pause so slow.
+const keepAlive = () => getSetting('keep_alive') || '24h';
+
+// Timing of recent replies, so the dashboard can show where the time goes.
+const timings = [];
+const ms = (ns) => Math.round((ns || 0) / 1e6);
+
 export function chat(messages, { temperature } = {}) {
   return enqueue(async () => {
+    const started = Date.now();
     const data = await call('/api/chat', {
       model: getSetting('chat_model'),
       messages,
       stream: false,
-      options: { temperature: temperature ?? getSetting('temperature') },
+      keep_alive: keepAlive(),
+      options: { temperature: temperature ?? getSetting('temperature'), num_ctx: Number(getSetting('context_size')) || 4096 },
     });
+    const t = {
+      at: Date.now(),
+      totalMs: Date.now() - started,
+      loadMs: ms(data.load_duration),
+      promptTokens: data.prompt_eval_count || 0,
+      promptMs: ms(data.prompt_eval_duration),
+      outputTokens: data.eval_count || 0,
+      outputMs: ms(data.eval_duration),
+    };
+    t.tokensPerSecond = t.outputMs ? +(t.outputTokens / (t.outputMs / 1000)).toFixed(1) : 0;
+    timings.unshift(t);
+    timings.length = Math.min(timings.length, 20);
+    console.log(`[ollama] Reply in ${(t.totalMs / 1000).toFixed(1)}s (load ${(t.loadMs / 1000).toFixed(1)}s, ` +
+      `read ${t.promptTokens} tokens in ${(t.promptMs / 1000).toFixed(1)}s, wrote ${t.outputTokens} tokens at ${t.tokensPerSecond}/s)`);
+    emit('ai-timing', t);
     return data.message?.content?.trim() || '';
   });
 }
@@ -41,10 +66,40 @@ export async function embed(texts) {
   const out = [];
   // Batch to keep requests a sensible size.
   for (let i = 0; i < input.length; i += 16) {
-    const data = await call('/api/embed', { model: getSetting('embed_model'), input: input.slice(i, i + 16) });
+    const data = await call('/api/embed', { model: getSetting('embed_model'), input: input.slice(i, i + 16), keep_alive: keepAlive() });
     out.push(...data.embeddings);
   }
   return out;
+}
+
+// Load both models into memory now, so the first customer doesn't wait for it.
+export async function warmUp() {
+  const started = Date.now();
+  try {
+    await Promise.all([
+      call('/api/chat', { model: getSetting('chat_model'), messages: [], keep_alive: keepAlive() }),
+      call('/api/embed', { model: getSetting('embed_model'), input: ['warm up'], keep_alive: keepAlive() }),
+    ]);
+    console.log(`[ollama] Models loaded into memory in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  } catch (err) {
+    console.warn('[ollama] Warm-up failed:', err.message);
+  }
+}
+
+// Which models are loaded right now, and how much of each sits on the graphics card.
+async function loaded() {
+  try {
+    const ps = await call('/api/ps', null, { timeoutMs: 5000 });
+    return (ps.models || []).map((m) => ({
+      name: m.name,
+      size: m.size,
+      vram: m.size_vram || 0,
+      gpuPercent: m.size ? Math.round(((m.size_vram || 0) / m.size) * 100) : 0,
+      expires_at: m.expires_at,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 // Suggested models with their approximate download sizes, shown before a download starts.
@@ -61,7 +116,7 @@ export const CATALOG = [
 const sameModel = (a, b) => a === b || a === `${b}:latest` || b === `${a}:latest`;
 
 export async function status() {
-  const base = { downloads: downloadList(), catalog: CATALOG, modelsPath: modelsPath() };
+  const base = { downloads: downloadList(), catalog: CATALOG, modelsPath: modelsPath(), timings };
   try {
     const tags = await call('/api/tags', null, { timeoutMs: 5000 });
     const installed = (tags.models || []).map((m) => ({
@@ -76,6 +131,8 @@ export async function status() {
     return {
       ...base,
       online: true,
+      loaded: await loaded(),
+      timings,
       installed,
       models: installed.map((m) => m.name),
       chatModelReady: has(getSetting('chat_model')),
@@ -163,6 +220,7 @@ export async function pullModel(model) {
     if (d.status !== 'success') throw new Error('Download ended before it finished');
     Object.assign(d, { state: 'done', completed: d.total, speed: 0, finishedAt: Date.now() });
     console.log(`[ollama] ${model} ready`);
+    if ([getSetting('chat_model'), getSetting('embed_model')].includes(model)) warmUp();
   } catch (err) {
     const cancelled = abort.signal.aborted;
     Object.assign(d, { state: cancelled ? 'cancelled' : 'error', error: cancelled ? null : err.message, speed: 0, finishedAt: Date.now() });
@@ -191,4 +249,5 @@ export async function ensureModels() {
   }
   if (!s.chatModelReady) pullModel(getSetting('chat_model'));
   if (!s.embedModelReady) pullModel(getSetting('embed_model'));
+  if (s.chatModelReady && s.embedModelReady) warmUp();
 }

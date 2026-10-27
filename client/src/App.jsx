@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, BookOpen, CornerUpRight, Plug, Cpu, Settings as SettingsIcon, LogOut, Menu, Bot } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, BookOpen, CornerUpRight, Plug, Cpu, Settings as SettingsIcon, LogOut, Menu, Bot, Forward } from 'lucide-react';
 import { api, closeSocket, getSocket } from './api.js';
 import { useEngine } from './useEngine.js';
 import Login from './pages/Login.jsx';
@@ -10,6 +10,7 @@ import Knowledge from './pages/Knowledge.jsx';
 import Redirects from './pages/Redirects.jsx';
 import Channels from './pages/Channels.jsx';
 import Engine from './pages/Engine.jsx';
+import Forwarding from './pages/Forwarding.jsx';
 import Settings from './pages/Settings.jsx';
 
 export default function App() {
@@ -39,7 +40,9 @@ function Shell({ user, onLogout }) {
   const [engine] = useEngine(15000);
   const location = useLocation();
 
-  useEffect(() => setOpen(false), [location.pathname]);
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
   useEffect(() => {
     const load = () => api('/stats').then((s) => setUnread(s.unread)).catch(() => {});
     load();
@@ -59,6 +62,7 @@ function Shell({ user, onLogout }) {
     ['/inbox', MessageSquare, 'Inbox', unread],
     ['/knowledge', BookOpen, 'Knowledge'],
     ['/redirects', CornerUpRight, 'Redirects'],
+    ['/forwarding', Forward, 'Email forwarding'],
     ['/channels', Plug, 'Channels'],
     ['/engine', Cpu, 'AI engine'],
     ['/settings', SettingsIcon, 'Settings'],
@@ -96,6 +100,7 @@ function Shell({ user, onLogout }) {
           <Route path="/inbox/:id?" element={<Inbox />} />
           <Route path="/knowledge" element={<Knowledge />} />
           <Route path="/redirects" element={<Redirects />} />
+          <Route path="/forwarding" element={<Forwarding />} />
           <Route path="/channels" element={<Channels />} />
           <Route path="/engine" element={<Engine />} />
           <Route path="/settings" element={<Settings />} />

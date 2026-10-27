@@ -108,7 +108,10 @@ function Conversation({ id }) {
     };
   }, [id]);
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [messages, typing]);
+  // Braces matter: newer browsers return a Promise from scrollIntoView, which React would treat as a cleanup.
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, typing]);
 
   if (!conv) return <div className="center muted">Loading…</div>;
 
@@ -149,7 +152,9 @@ function Conversation({ id }) {
         </div>
       </header>
       <div className="messages">
-        {messages.map((m) => (
+        {messages.map((m) => m.direction === 'note' ? (
+          <div key={m.id} className="note" dir="auto">{m.text} · {formatTime(m.created_at)}</div>
+        ) : (
           <div key={m.id} className={`msg ${m.direction} ${m.sender}`}>
             <div className="bubble" dir="auto">{m.text}</div>
             <div className="meta small muted">

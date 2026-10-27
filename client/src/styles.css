@@ -244,3 +244,13 @@ ol { margin: 6px 0 10px; padding-inline-start: 22px; line-height: 1.7; }
   .chat { min-height: 70vh; }
   .msg { max-width: 90%; }
 }
+.timings { margin: 10px 0; }
+.card .alert:last-child { margin-bottom: 0; }
+.alert.small { font-size: 13px; margin-top: 10px; margin-bottom: 0; }
+.note { align-self: center; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px dashed var(--border); border-radius: 999px; padding: 5px 12px; max-width: 90%; text-align: center; }
+.label { font-size: 13px; font-weight: 500; }
+.choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.choice button { justify-content: flex-start; text-align: start; padding: 12px 14px; white-space: normal; background: var(--panel-2); }
+.choice button span { display: flex; flex-direction: column; gap: 2px; }
+.choice button small { color: var(--muted); font-size: 12px; }
+.choice button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
