@@ -42,6 +42,13 @@ export function startMockOllama() {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: /invoice/i.test(system.split('Email:')[1]) ? '1' : 'none' } }));
       }
       const knows = system.includes('9am to 6pm');
+      const lastUser = [...data.messages].reverse().find((m) => m.role === 'user')?.content || '';
+      if (/what is toptech/i.test(lastUser)) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'TopTech是我们提供最新科技产品的商店。' } }));
+      }
+      if (/write that again in English/.test(lastUser)) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'TopTech is our shop for the latest tech products.' } }));
+      }
       return res.end(JSON.stringify({
         message: { role: 'assistant', content: knows ? 'We are open 9am to 6pm.' : 'I am not sure.' },
         load_duration: 42e9, prompt_eval_count: 1450, prompt_eval_duration: 38e9, eval_count: 60, eval_duration: 12e9,

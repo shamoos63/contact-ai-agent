@@ -55,7 +55,7 @@ test('knowledge is indexed and used in answers', async () => {
 
 test('redirect rules and language rule go into the system prompt', () => {
   mods.db.prepare('INSERT INTO redirects (name, when_text, value) VALUES (?, ?, ?)').run('Sales', 'they want to buy', '+971500000000');
-  const prompt = mods.agent.buildSystemPrompt([]);
+  const prompt = mods.agent.buildSystemPrompt([], 'Arabic');
   assert.match(prompt, /\+971500000000/);
   assert.match(prompt, /Arabic/);
 });
@@ -157,4 +157,16 @@ test('team notes are shown in the conversation but not sent to the AI', async ()
   const chatCall = mock.calls.slice(before).find((c) => c.path === '/api/chat');
   assert.ok(!chatCall.data.messages.some((m) => m.content.includes('Forwarded to hr@')));
   assert.equal(chatCall.data.keep_alive, '24h');
+});
+
+test('replies stay in the customer language and Chinese drift is retried', async () => {
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: 'مرحبا، كم السعر؟' }]), 'Arabic');
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: 'مرحبا' }, { role: 'assistant', content: 'أهلا' }, { role: 'user', content: '👍' }]), 'Arabic');
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: 'hi' }]), 'English');
+  const { reply, language } = await mods.agent.answer([{ role: 'user', content: 'What is TopTech?' }]);
+  assert.equal(language, 'English');
+  assert.equal(reply, 'TopTech is our shop for the latest tech products.');
+  const last = mock.calls.filter((c) => c.path === '/api/chat').at(-2);
+  assert.match(last.data.messages[0].content, /reply in English only/);
+  assert.match(last.data.messages.at(-1).content, /in English only/);
 });

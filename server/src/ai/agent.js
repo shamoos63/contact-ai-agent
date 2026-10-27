@@ -7,14 +7,34 @@ export function redirectRules() {
   return db.prepare('SELECT * FROM redirects WHERE enabled = 1 ORDER BY id').all();
 }
 
-export function buildSystemPrompt(knowledge) {
+const ARABIC = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LATIN = /[A-Za-z]/;
+// Chinese, Japanese and Korean characters. Qwen models sometimes drift into Chinese.
+const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
+
+// The language of the customer's latest message that has letters in it (Arabic or English).
+export function detectLanguage(messages) {
+  for (const m of [...messages].reverse()) {
+    if (m.role !== 'user') continue;
+    if (ARABIC.test(m.content)) return 'Arabic';
+    if (LATIN.test(m.content)) return 'English';
+  }
+  return 'English';
+}
+
+function wrongLanguage(reply, language) {
+  if (CJK.test(reply)) return true;
+  return language === 'Arabic' && !ARABIC.test(reply);
+}
+
+export function buildSystemPrompt(knowledge, language = 'English') {
   const company = getSetting('company_name');
   const base = getSetting('system_prompt').replaceAll('{company}', company);
   const rules = redirectRules();
   const parts = [
     base,
     '',
-    'LANGUAGE: Always reply in the same language the customer wrote in. If they write in Arabic (any dialect), reply in Arabic. If they write in English, reply in English.',
+    `LANGUAGE: The customer is writing in ${language}. Write your whole reply in ${language} only. Never answer in Chinese or any other language, even if the knowledge below is in another language.`,
     'Never invent prices, policies, phone numbers or links. Use only the knowledge and redirect rules below.',
     `If the knowledge does not answer the question, reply with this message (translated to the customer's language): "${getSetting('fallback_message')}"`,
   ];
@@ -46,6 +66,21 @@ export async function answer(messages) {
   } catch (err) {
     console.error('[agent] Knowledge search failed:', err.message);
   }
-  const reply = await chat([{ role: 'system', content: buildSystemPrompt(knowledge) }, ...messages]);
-  return { reply: reply || getSetting('fallback_message'), sources: knowledge };
+  const language = detectLanguage(messages);
+  const prompt = [
+    { role: 'system', content: buildSystemPrompt(knowledge, language) },
+    ...messages,
+    // A last reminder right before the answer is what keeps small models in the right language.
+    { role: 'system', content: `Answer the customer now, in ${language} only.` },
+  ];
+  let reply = await chat(prompt);
+  if (reply && wrongLanguage(reply, language)) {
+    console.warn(`[agent] Reply was not in ${language}, asking again`);
+    reply = await chat(
+      [...prompt, { role: 'assistant', content: reply }, { role: 'user', content: `Please write that again in ${language} only.` }],
+      { temperature: 0 },
+    );
+    if (wrongLanguage(reply, language)) reply = '';
+  }
+  return { reply: reply || getSetting('fallback_message'), sources: knowledge, language };
 }
