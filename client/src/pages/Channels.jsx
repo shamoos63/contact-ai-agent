@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { api, getSocket } from '../api.js';
+import { api, getSocket, CHANNELS } from '../api.js';
+import { PageHeader } from '../components/ui.jsx';
+import { StatusPill } from './Overview.jsx';
 
 export default function Channels() {
   const [status, setStatus] = useState(null);
@@ -22,7 +24,7 @@ export default function Channels() {
 
   return (
     <div className="page">
-      <h2>Channels</h2>
+      <PageHeader title="Channels" subtitle="Connect the places your customers write to you. Every message lands in the shared inbox." />
       <WhatsApp status={status.whatsapp} settings={settings.whatsapp} save={save} />
       <Telegram status={status.telegram} settings={settings.telegram} save={save} />
       <Email accounts={status.email} reload={load} />
@@ -32,20 +34,24 @@ export default function Channels() {
 }
 
 function Status({ value, error }) {
-  const labels = {
-    connected: ['ok', 'Connected'], configured: ['ok', 'Configured'], qr: ['warn', 'Waiting for QR scan'],
-    connecting: ['warn', 'Connecting…'], reconnecting: ['warn', 'Reconnecting…'], disabled: ['muted', 'Off'],
-    stopped: ['muted', 'Stopped'], incomplete: ['warn', 'Missing settings'], logged_out: ['warn', 'Logged out'], error: ['error', 'Error'],
-  };
-  const [cls, label] = labels[value] || ['muted', value];
-  return <span className={`status ${cls}`} title={error || ''}>● {label}{error && value !== 'connected' ? `: ${error}` : ''}</span>;
+  return (
+    <span className="row">
+      <StatusPill status={value} error={error} />
+      {error && value !== 'connected' && <span className="small error">{error}</span>}
+    </span>
+  );
+}
+
+function Title({ channel, children }) {
+  const ch = CHANNELS[channel];
+  return <h3 className="row"><span className="channel-dot" style={{ background: ch.color }}>{ch.short}</span>{children}</h3>;
 }
 
 function WhatsApp({ status, settings, save }) {
   return (
     <div className="card">
       <div className="card-head">
-        <h3>🟢 WhatsApp</h3>
+        <Title channel="whatsapp">WhatsApp</Title>
         <Status value={status.status} error={status.error} />
       </div>
       <p className="muted small">Links like WhatsApp Web. Use a separate business number: WhatsApp can ban numbers it thinks are automated.</p>
@@ -75,7 +81,7 @@ function Telegram({ status, settings, save }) {
   return (
     <div className="card">
       <div className="card-head">
-        <h3>✈️ Telegram bot</h3>
+        <Title channel="telegram">Telegram bot</Title>
         <Status value={status.status} error={status.error} />
       </div>
       <p className="muted small">Create a bot with <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> (send /newbot) and paste its token here.</p>
@@ -126,7 +132,7 @@ function Email({ accounts, reload }) {
   return (
     <div className="card">
       <div className="card-head">
-        <h3>✉️ Email</h3>
+        <Title channel="email">Email</Title>
         <button onClick={() => { setForm(NEW_ACCOUNT); setMsg(''); }}>+ Add account</button>
       </div>
       <p className="muted small">Gmail or any domain mailbox via IMAP and SMTP. For Gmail, turn on 2-step verification and use an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">app password</a>. Only emails that arrive after you connect are answered.</p>
@@ -177,7 +183,7 @@ function Meta({ status, settings, save }) {
   return (
     <div className="card">
       <div className="card-head">
-        <h3>📘 Facebook & 📸 Instagram</h3>
+        <Title channel="facebook">Facebook & Instagram</Title>
         <Status value={status.status} />
       </div>
       <p className="muted small">

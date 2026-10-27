@@ -62,10 +62,15 @@ api.delete('/conversations/:id', (req, res) => {
   res.json({ ok: true });
 });
 api.get('/stats', (req, res) => {
+  const one = (sql) => db.prepare(sql).get().n;
   res.json({
     conversations: db.prepare('SELECT channel, COUNT(*) AS n FROM conversations GROUP BY channel').all(),
-    unread: db.prepare('SELECT COALESCE(SUM(unread), 0) AS n FROM conversations').get().n,
+    open: one("SELECT COUNT(*) AS n FROM conversations WHERE status = 'open'"),
+    unread: one('SELECT COALESCE(SUM(unread), 0) AS n FROM conversations'),
     today: db.prepare("SELECT sender, COUNT(*) AS n FROM messages WHERE created_at >= date('now') GROUP BY sender").all(),
+    failedToday: one("SELECT COUNT(*) AS n FROM messages WHERE error IS NOT NULL AND created_at >= date('now')"),
+    knowledge: one("SELECT COUNT(*) AS n FROM kb_sources WHERE status = 'ready'"),
+    redirects: one('SELECT COUNT(*) AS n FROM redirects WHERE enabled = 1'),
   });
 });
 
@@ -204,9 +209,20 @@ api.get('/ai/status', wrap(async (req, res) => res.json(await ollama.status())))
 api.post('/ai/pull', (req, res) => {
   const model = req.body?.model;
   if (!model) return res.status(400).json({ error: 'Model is required' });
-  ollama.pullModel(model).catch((err) => console.error('[ollama]', err.message));
+  ollama.pullModel(model);
   res.json({ ok: true });
 });
+api.post('/ai/cancel', (req, res) => {
+  ollama.cancelPull(req.body?.model);
+  res.json({ ok: true });
+});
+api.delete('/ai/models/:model', wrap(async (req, res) => {
+  const model = req.params.model;
+  const inUse = [getSetting('chat_model'), getSetting('embed_model')];
+  if (inUse.includes(model)) return res.status(400).json({ error: 'This model is in use. Choose another model in Settings first.' });
+  await ollama.deleteModel(model);
+  res.json({ ok: true });
+}));
 
 // --- Channels ---
 api.get('/channels', (req, res) => res.json(channelStatus()));

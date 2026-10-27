@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Bot } from 'lucide-react';
 import { api } from '../api.js';
 
 export default function Login({ onLogin }) {
@@ -20,7 +21,7 @@ export default function Login({ onLogin }) {
   return (
     <div className="center">
       <form className="card login" onSubmit={submit}>
-        <h1>🤖 Contact AI Agent</h1>
+        <div className="login-head"><span className="brand-mark big"><Bot size={26} /></span><h1>Contact AI Agent</h1><p className="muted">Sign in to your dashboard</p></div>
         <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></label>
         <label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
         {error && <div className="error">{error}</div>}

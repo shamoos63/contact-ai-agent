@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { Search, Send, Bot, UserRound, MessageSquare } from 'lucide-react';
 import { api, getSocket, CHANNELS, timeAgo, formatTime } from '../api.js';
+import { Avatar, ChannelTag } from '../components/ui.jsx';
 
 export default function Inbox() {
   const { id } = useParams();
@@ -31,20 +33,28 @@ export default function Inbox() {
     <div className="inbox">
       <section className="conv-list">
         <div className="conv-tools">
-          <input placeholder="Search…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <div className="search">
+            <Search size={16} />
+            <input placeholder="Search conversations" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
           <div className="chips">
             <button className={!filter ? 'chip active' : 'chip'} onClick={() => setFilter('')}>All</button>
             {Object.entries(CHANNELS).map(([k, v]) => (
-              <button key={k} className={filter === k ? 'chip active' : 'chip'} onClick={() => setFilter(k)} title={v.label}>
-                {v.icon}
+              <button key={k} className={filter === k ? 'chip active' : 'chip'} onClick={() => setFilter(k)}>
+                <span className="chip-dot" style={{ background: v.color }} /> {v.label}
               </button>
             ))}
           </div>
         </div>
-        {shown.length === 0 && <div className="muted pad">No conversations yet. Connect a channel to start receiving messages.</div>}
+        {shown.length === 0 && (
+          <div className="empty">
+            <MessageSquare size={28} />
+            <p>{conversations.length ? 'Nothing matches this filter.' : 'No conversations yet. Connect a channel to start receiving messages.'}</p>
+          </div>
+        )}
         {shown.map((c) => (
           <button key={c.id} className={`conv ${String(c.id) === id ? 'selected' : ''}`} onClick={() => navigate(`/inbox/${c.id}`)}>
-            <span className="dot" style={{ background: CHANNELS[c.channel]?.color }} title={CHANNELS[c.channel]?.label} />
+            <Avatar name={c.contact_name || c.contact_handle} channel={c.channel} />
             <span className="conv-body">
               <span className="conv-top">
                 <strong dir="auto">{c.contact_name || c.contact_handle || c.external_id}</strong>
@@ -52,12 +62,16 @@ export default function Inbox() {
               </span>
               <span className="conv-preview muted" dir="auto">{c.last_message}</span>
             </span>
-            {c.unread > 0 && <span className="badge">{c.unread}</span>}
-            {!c.auto_reply && <span className="tag" title="AI is paused, a human is handling this chat">👤</span>}
+            <span className="conv-side">
+              {c.unread > 0 && <span className="badge">{c.unread}</span>}
+              {!c.auto_reply && <span className="tag-soft" title="AI is paused, a human is handling this chat">You</span>}
+            </span>
           </button>
         ))}
       </section>
-      {id ? <Conversation key={id} id={Number(id)} /> : <div className="center muted">Select a conversation</div>}
+      {id ? <Conversation key={id} id={Number(id)} /> : (
+        <div className="empty grow-empty"><MessageSquare size={36} /><p>Select a conversation to read it.</p></div>
+      )}
     </div>
   );
 }
@@ -97,7 +111,6 @@ function Conversation({ id }) {
   useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [messages, typing]);
 
   if (!conv) return <div className="center muted">Loading…</div>;
-  const ch = CHANNELS[conv.channel];
 
   const send = async (e) => {
     e.preventDefault();
@@ -117,11 +130,14 @@ function Conversation({ id }) {
   return (
     <section className="chat">
       <header className="chat-head">
-        <div>
-          <strong dir="auto">{conv.contact_name || conv.contact_handle}</strong>
-          <div className="muted small">
-            <span style={{ color: ch?.color }}>{ch?.icon} {ch?.label}</span> · {conv.contact_handle}
-            {conv.subject && <> · <span dir="auto">{conv.subject}</span></>}
+        <div className="row">
+          <Avatar name={conv.contact_name || conv.contact_handle} channel={conv.channel} />
+          <div>
+            <strong dir="auto">{conv.contact_name || conv.contact_handle}</strong>
+            <div className="muted small row">
+              <ChannelTag channel={conv.channel} /> {conv.contact_handle}
+              {conv.subject && <> · <span dir="auto">{conv.subject}</span></>}
+            </div>
           </div>
         </div>
         <div className="row">
@@ -137,12 +153,14 @@ function Conversation({ id }) {
           <div key={m.id} className={`msg ${m.direction} ${m.sender}`}>
             <div className="bubble" dir="auto">{m.text}</div>
             <div className="meta small muted">
-              {m.sender === 'ai' ? '🤖 AI' : m.sender === 'agent' ? '👤 You' : ''} {formatTime(m.created_at)}
+              {m.sender === 'ai' && <><Bot size={12} /> AI · </>}
+              {m.sender === 'agent' && <><UserRound size={12} /> You · </>}
+              {formatTime(m.created_at)}
               {m.error && <span className="error"> · not delivered: {m.error}</span>}
             </div>
           </div>
         ))}
-        {typing && <div className="msg out ai"><div className="bubble muted">🤖 typing…</div></div>}
+        {typing && <div className="msg out ai"><div className="bubble typing"><span /><span /><span /></div></div>}
         <div ref={bottom} />
       </div>
       <form className="composer" onSubmit={send}>
@@ -154,8 +172,8 @@ function Conversation({ id }) {
           placeholder="Type a reply… (Enter to send, Shift+Enter for new line)"
         />
         <div className="col">
-          <button className="primary">Send</button>
-          <button type="button" onClick={aiReply} title="Let the AI answer now">🤖 AI reply</button>
+          <button className="primary"><Send size={15} /> Send</button>
+          <button type="button" onClick={aiReply} title="Let the AI answer now"><Bot size={15} /> AI reply</button>
         </div>
       </form>
       {error && <div className="error pad">{error}</div>}

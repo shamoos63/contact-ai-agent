@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { CornerUpRight } from 'lucide-react';
 import { api } from '../api.js';
+import { PageHeader } from '../components/ui.jsx';
 
 const EMPTY = { name: '', when_text: '', value: '', enabled: true };
 
@@ -29,8 +31,7 @@ export default function Redirects() {
 
   return (
     <div className="page">
-      <h2>Redirects</h2>
-      <p className="muted">Tell the AI where to send customers. When a customer's message matches a rule, the AI includes the link or phone number in its reply.</p>
+      <PageHeader title="Redirects" subtitle="Tell the AI where to send customers. When a customer's message matches a rule, the AI includes the link or phone number in its reply." />
 
       <form className="card stack" onSubmit={save}>
         <h3>{form.id ? 'Edit rule' : 'New rule'}</h3>
@@ -44,10 +45,10 @@ export default function Redirects() {
         </div>
       </form>
 
-      <table className="table">
+      <div className="table-wrap"><table className="table">
         <thead><tr><th>On</th><th>Name</th><th>When</th><th>Send</th><th /></tr></thead>
         <tbody>
-          {rules.length === 0 && <tr><td colSpan="5" className="muted">No rules yet.</td></tr>}
+          {rules.length === 0 && <tr><td colSpan="5"><div className="empty"><CornerUpRight size={28} /><p>No rules yet.</p></div></td></tr>}
           {rules.map((r) => (
             <tr key={r.id} className={r.enabled ? '' : 'muted'}>
               <td><input type="checkbox" checked={!!r.enabled} onChange={() => toggle(r)} /></td>
@@ -61,7 +62,7 @@ export default function Redirects() {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
     </div>
   );
 }

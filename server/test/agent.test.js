@@ -106,3 +106,15 @@ test('Meta webhook checks the signature and creates a conversation', async () =>
   assert.equal(await call(good), 200);
   assert.equal(mods.inbox.listConversations({ channel: 'facebook' })[0].external_id, 'U9');
 });
+
+test('model download reports size and progress', async () => {
+  const ollama = await import('../src/ai/ollama.js');
+  await ollama.pullModel('qwen2.5:3b');
+  const s = await ollama.status();
+  const d = s.downloads.find((x) => x.model === 'qwen2.5:3b');
+  assert.equal(d.state, 'done');
+  assert.equal(d.total, 1010);
+  assert.equal(d.completed, 1010);
+  assert.equal(s.installed[0].size, 4683087332);
+  assert.ok(s.modelsPath);
+});

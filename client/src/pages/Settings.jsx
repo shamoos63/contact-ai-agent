@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api.js';
+import { PageHeader, Pill, DownloadProgress } from '../components/ui.jsx';
+import { useEngine } from '../useEngine.js';
 
 export default function Settings() {
   const [s, setS] = useState(null);
-  const [ai, setAi] = useState(null);
+  const [ai, loadAi] = useEngine(5000);
   const [saved, setSaved] = useState('');
 
-  const loadAi = () => api('/ai/status').then(setAi);
   useEffect(() => {
     api('/settings').then(setS);
-    loadAi();
-    const t = setInterval(loadAi, 5000);
-    return () => clearInterval(t);
   }, []);
 
   if (!s) return <div className="center muted">Loading…</div>;
@@ -32,7 +31,7 @@ export default function Settings() {
 
   return (
     <div className="page">
-      <h2>Settings</h2>
+      <PageHeader title="Settings" />
       <form className="stack" onSubmit={save}>
         <div className="card stack">
           <h3>Assistant</h3>
@@ -53,7 +52,7 @@ export default function Settings() {
         <div className="card stack">
           <div className="card-head">
             <h3>AI engine (Ollama)</h3>
-            {ai && <span className={`status ${ai.online ? 'ok' : 'error'}`}>● {ai.online ? 'Running' : 'Not reachable'}</span>}
+            {ai && (ai.online ? <Pill tone="ok">Running</Pill> : <Pill tone="error">Not reachable</Pill>)}
           </div>
           <label>Ollama address<input value={s.ollama_url} onChange={set('ollama_url')} /></label>
           <div className="grid2">
@@ -72,7 +71,7 @@ export default function Settings() {
             Good free choices for Arabic + English: <code>qwen2.5:7b</code> (or <code>qwen2.5:14b</code> on a strong GPU) for chat, and <code>bge-m3</code> for embeddings.
             Changing the embedding model re-learns the whole knowledge base.
           </small>
-          {ai?.models?.length > 0 && <small className="muted">Installed: {ai.models.join(', ')}</small>}
+          <small><Link to="/engine">Manage models, see download progress and where the files are →</Link></small>
         </div>
 
         <div className="row">
@@ -87,7 +86,8 @@ export default function Settings() {
 
 function ModelState({ ai, model, ready }) {
   if (!ai?.online) return null;
-  if (ai.pulling?.includes(model)) return <small className="muted">⏳ Downloading… (can take several minutes)</small>;
+  const d = ai.downloads?.find((x) => x.model === model && x.state !== 'done');
+  if (d) return <DownloadProgress d={d} />;
   if (ready) return <small className="ok">✓ Installed</small>;
   return (
     <small className="warn">

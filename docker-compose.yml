@@ -8,6 +8,7 @@ services:
     environment:
       OLLAMA_URL: http://ollama:11434
       DATA_DIR: /data
+      OLLAMA_MODELS_PATH: the "ollama-models" folder inside your contact-ai-agent project folder
     volumes:
       - ./data:/data
     depends_on:
@@ -17,7 +18,8 @@ services:
     image: ollama/ollama:latest
     restart: unless-stopped
     volumes:
-      - ollama:/root/.ollama
+      # Model files live next to the project so they are easy to back up or copy to another computer.
+      - ./ollama-models:/root/.ollama/models
     # NVIDIA GPU: install the NVIDIA Container Toolkit and uncomment below.
     # deploy:
     #   resources:
@@ -36,6 +38,3 @@ services:
     command: tunnel --no-autoupdate --url http://app:3000
     depends_on:
       - app
-
-volumes:
-  ollama:

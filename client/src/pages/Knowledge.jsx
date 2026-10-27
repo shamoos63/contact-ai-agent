@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { api, getSocket, formatTime } from '../api.js';
+import { FileUp, Globe, PenLine, FlaskConical, BookOpen } from 'lucide-react';
+import { api, getSocket, formatTime, formatBytes } from '../api.js';
+import { PageHeader, Pill } from '../components/ui.jsx';
 
 export default function Knowledge() {
   const [sources, setSources] = useState([]);
@@ -38,14 +40,13 @@ export default function Knowledge() {
 
   return (
     <div className="page">
-      <h2>Knowledge base</h2>
-      <p className="muted">Everything the AI knows about your company. Add documents, web pages or typed notes in Arabic or English. The AI only answers from what is here.</p>
+      <PageHeader title="Knowledge base" subtitle="Everything the AI knows about your company. Add documents, web pages or typed notes in Arabic or English. The AI only answers from what is here." />
 
       <div className="card">
         <div className="tabs">
           {['files', 'url', 'text'].map((t) => (
             <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>
-              {{ files: '📄 Upload documents', url: '🌐 Web pages', text: '✍️ Write text' }[t]}
+              {{ files: <><FileUp size={15} /> Upload documents</>, url: <><Globe size={15} /> Web pages</>, text: <><PenLine size={15} /> Write text</> }[t]}
             </button>
           ))}
         </div>
@@ -57,23 +58,23 @@ export default function Knowledge() {
 
       <TestBox />
 
-      <table className="table">
+      <div className="table-wrap"><table className="table">
         <thead>
           <tr><th>Source</th><th>Type</th><th>Status</th><th>Added</th><th /></tr>
         </thead>
         <tbody>
-          {sources.length === 0 && <tr><td colSpan="5" className="muted">Nothing yet. Add your first document above.</td></tr>}
+          {sources.length === 0 && <tr><td colSpan="5"><div className="empty"><BookOpen size={28} /><p>Nothing yet. Add your first document above.</p></div></td></tr>}
           {sources.map((s) => (
             <tr key={s.id}>
               <td dir="auto">
                 <strong>{s.title}</strong>
                 {s.origin && s.type === 'url' && <div className="small"><a href={s.origin} target="_blank" rel="noreferrer">{s.origin}</a></div>}
               </td>
-              <td>{s.type}</td>
+              <td><span className="tag-soft">{s.type}</span>{s.size > 0 && <div className="small muted">{formatBytes(s.size)} of text</div>}</td>
               <td>
-                {s.status === 'ready' && <span className="ok">✓ {s.chunk_count} parts</span>}
-                {s.status === 'pending' && <span className="muted">⏳ learning…</span>}
-                {s.status === 'error' && <span className="error" title={s.error}>⚠ {s.error}</span>}
+                {s.status === 'ready' && <Pill tone="ok">Learned · {s.chunk_count} parts</Pill>}
+                {s.status === 'pending' && <Pill tone="warn">Learning…</Pill>}
+                {s.status === 'error' && <><Pill tone="error">Failed</Pill><div className="small error">{s.error}</div></>}
               </td>
               <td className="small muted">{formatTime(s.created_at)}</td>
               <td className="row">
@@ -84,7 +85,7 @@ export default function Knowledge() {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
 
       {editing && (
         <div className="modal" onClick={() => setEditing(null)}>
@@ -169,7 +170,7 @@ function TestBox() {
   };
   return (
     <div className="card">
-      <h3>🧪 Try it</h3>
+      <h3><FlaskConical size={16} /> Try it</h3>
       <form className="row" onSubmit={ask}>
         <input dir="auto" className="grow" placeholder="Ask like a customer would, e.g. ما هي أسعاركم؟" value={question} onChange={(e) => setQuestion(e.target.value)} />
         <button className="primary" disabled={busy || !question.trim()}>{busy ? 'Thinking…' : 'Ask'}</button>

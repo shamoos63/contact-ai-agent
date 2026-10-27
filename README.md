@@ -12,6 +12,8 @@ Everything runs on your own computer with free, local AI ([Ollama](https://ollam
 | **Knowledge base** | Upload PDF / Word / text files, add web pages, or type notes. The AI answers only from this. A "Try it" box lets you test answers. |
 | **Redirects** | Rules like "when the customer wants to buy → send +971…" or "→ send https://…". |
 | **Channels** | WhatsApp (QR scan, like WhatsApp Web), Telegram bot, any number of email accounts (Gmail or your domain, IMAP/SMTP), Facebook + Instagram (official Meta API). |
+| **Overview** | Today's numbers, channel status, AI engine status and a getting-started checklist. |
+| **AI engine** | Installed models with sizes, live download progress, suggested models, and where the files are stored. |
 | **Settings** | Company name, AI personality, fallback message, reply delay, model choice, admin password. |
 
 Stack: Node.js (Express, Socket.IO), React (Vite), SQLite, Ollama. One Docker Compose file runs it all.
@@ -29,7 +31,24 @@ docker compose up -d --build
 
 Open **http://localhost:3000** and log in with the username/password from `.env`.
 
-On the first start the app downloads the AI models (`qwen2.5:7b` ≈ 4.7 GB and `bge-m3` ≈ 1.2 GB). You can watch progress under **Settings → AI engine**; AI replies start working when both show "Installed".
+On the first start the app downloads the AI models (`qwen2.5:7b` ≈ 4.7 GB and `bge-m3` ≈ 1.2 GB). The **AI engine** page shows each download live (size, progress, speed, time left), lets you pause/resume, download other models, and delete ones you don't use. AI replies start working when both models show "Installed".
+
+### Where the AI model files are (and moving them to another computer)
+
+Models are stored in the **`ollama-models`** folder inside the project folder (next to `docker-compose.yml`). To reuse them on another computer without downloading again:
+
+1. `docker compose down`
+2. Copy the whole `ollama-models` folder (it contains `blobs` and `manifests`).
+3. Put it in the project folder on the other computer and run `docker compose up -d`.
+
+If Ollama is installed directly (not in Docker), its models folder is `%USERPROFILE%\.ollama\models` on Windows and `~/.ollama/models` on Mac/Linux.
+
+> **Upgrading from the first version?** Models used to live in a Docker volume. To move them into the new folder instead of downloading again, run this once in the project folder (PowerShell or terminal), then `docker compose up -d`:
+> ```bash
+> docker compose down
+> docker run --rm -v contact-ai-agent_ollama:/from -v "${PWD}/ollama-models:/to" alpine sh -c "cp -a /from/models/. /to/"
+> ```
+> After checking the models appear on the AI engine page, you can remove the old volume with `docker volume rm contact-ai-agent_ollama`.
 
 > On a Mac, Ollama inside Docker cannot use the Apple GPU. For much faster replies install the Ollama app on the Mac itself, remove the `ollama` service from `docker-compose.yml`, and set `OLLAMA_URL=http://host.docker.internal:11434` in `.env`.
 
