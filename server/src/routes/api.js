@@ -12,6 +12,7 @@ import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
 import { logoutWhatsApp } from '../channels/whatsapp.js';
 import { listAccounts, testAccount, PRESETS } from '../channels/email.js';
+import { listRules, validateRule, matchRules } from '../channels/email-rules.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -200,6 +201,7 @@ api.put('/settings', wrap(async (req, res) => {
   if ('telegram' in body) restart.telegram();
   if ('whatsapp' in body && body.whatsapp.enabled !== before.whatsapp.enabled) restart.whatsapp();
   if (body.embed_model && body.embed_model !== before.embed_model) reindexAll();
+  if (body.chat_model && body.chat_model !== before.chat_model) ollama.warmUp();
   emit('channels', channelStatus());
   res.json(maskedSettings());
 }));
@@ -288,6 +290,51 @@ api.delete('/email-accounts/:id', (req, res) => {
   restart.email();
   res.json({ ok: true });
 });
+
+// --- Email forwarding rules ---
+function ruleInput(body) {
+  return {
+    name: String(body.name || '').trim(),
+    match_type: body.match_type === 'ai' ? 'ai' : 'keywords',
+    match_text: String(body.match_text || '').trim(),
+    match_field: ['any', 'from', 'subject', 'body'].includes(body.match_field) ? body.match_field : 'any',
+    forward_to: String(body.forward_to || '').trim(),
+    account_id: body.account_id ? Number(body.account_id) : null,
+    ai_reply: body.ai_reply === undefined || body.ai_reply ? 1 : 0,
+    include_attachments: body.include_attachments === undefined || body.include_attachments ? 1 : 0,
+    enabled: body.enabled === undefined || body.enabled ? 1 : 0,
+  };
+}
+api.get('/email-rules', (req, res) => res.json(listRules()));
+api.post('/email-rules', (req, res) => {
+  const r = ruleInput(req.body || {});
+  const problem = validateRule(r);
+  if (problem) return res.status(400).json({ error: problem });
+  const info = db.prepare(
+    `INSERT INTO email_rules (name, match_type, match_text, match_field, forward_to, account_id, ai_reply, include_attachments, enabled)
+     VALUES (@name, @match_type, @match_text, @match_field, @forward_to, @account_id, @ai_reply, @include_attachments, @enabled)`,
+  ).run(r);
+  res.json({ id: info.lastInsertRowid });
+});
+api.put('/email-rules/:id', (req, res) => {
+  const r = ruleInput(req.body || {});
+  const problem = validateRule(r);
+  if (problem) return res.status(400).json({ error: problem });
+  db.prepare(
+    `UPDATE email_rules SET name=@name, match_type=@match_type, match_text=@match_text, match_field=@match_field, forward_to=@forward_to,
+     account_id=@account_id, ai_reply=@ai_reply, include_attachments=@include_attachments, enabled=@enabled WHERE id=@id`,
+  ).run({ ...r, id: Number(req.params.id) });
+  res.json({ ok: true });
+});
+api.delete('/email-rules/:id', (req, res) => {
+  db.prepare('DELETE FROM email_rules WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+api.post('/email-rules/test', wrap(async (req, res) => {
+  const { from = '', subject = '', text = '', account_id } = req.body || {};
+  const rules = await matchRules({ accountId: account_id ? Number(account_id) : null, from, fromName: '', subject, text });
+  res.json(rules.map((r) => ({ id: r.id, name: r.name, forward_to: r.forward_to, ai_reply: !!r.ai_reply })));
+}));
 
 api.use((err, req, res, next) => {
   console.error('[api]', err);

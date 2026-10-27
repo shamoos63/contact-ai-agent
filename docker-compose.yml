@@ -20,14 +20,9 @@ services:
     volumes:
       # Model files live next to the project so they are easy to back up or copy to another computer.
       - ./ollama-models:/root/.ollama/models
-    # NVIDIA GPU: install the NVIDIA Container Toolkit and uncomment below.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+    # For an NVIDIA graphics card, start with docker-compose.gpu.yml as well (see README).
 
   # Optional: public HTTPS address for the Facebook/Instagram webhooks.
   # Start with: docker compose --profile tunnel up -d   (then see the logs for the URL)

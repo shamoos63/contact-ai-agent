@@ -14,8 +14,11 @@ export function useEngine(pollMs = 10000) {
       setEngine((e) => (e ? { ...e, downloads } : e));
       if (downloads.some((d) => d.state === 'done')) load();
     };
+    const onTiming = (t) => setEngine((e) => (e ? { ...e, timings: [t, ...(e.timings || [])].slice(0, 20) } : e));
     socket.on('model-downloads', onDownloads);
+    socket.on('ai-timing', onTiming);
     return () => {
+      socket.off('ai-timing', onTiming);
       alive = false;
       clearInterval(timer);
       socket.off('model-downloads', onDownloads);

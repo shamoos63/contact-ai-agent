@@ -14,6 +14,8 @@ const DEFAULTS = {
   auto_reply: true,
   reply_delay_seconds: 4,
   temperature: 0.3,
+  keep_alive: '24h',
+  context_size: 4096,
   telegram: { enabled: false, token: '' },
   whatsapp: { enabled: false },
   meta: {

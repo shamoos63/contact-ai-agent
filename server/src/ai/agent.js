@@ -31,7 +31,7 @@ export function buildSystemPrompt(knowledge) {
 // Produce a reply for a conversation, based on its recent history and the knowledge base.
 export async function generateReply(conversationId) {
   const history = db
-    .prepare('SELECT direction, sender, text FROM messages WHERE conversation_id = ? AND error IS NULL ORDER BY id DESC LIMIT 12')
+    .prepare("SELECT direction, sender, text FROM messages WHERE conversation_id = ? AND error IS NULL AND direction <> 'note' ORDER BY id DESC LIMIT 10")
     .all(conversationId)
     .reverse();
   return answer(history.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text })));
@@ -42,7 +42,7 @@ export async function answer(messages) {
   const recentUser = messages.filter((m) => m.role === 'user').slice(-3).map((m) => m.content).join('\n');
   let knowledge = [];
   try {
-    knowledge = await search(recentUser, { k: 5 });
+    knowledge = await search(recentUser, { k: 4 });
   } catch (err) {
     console.error('[agent] Knowledge search failed:', err.message);
   }

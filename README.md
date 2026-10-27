@@ -11,6 +11,7 @@ Everything runs on your own computer with free, local AI ([Ollama](https://ollam
 | **Shared inbox** | All conversations from every channel in one place, live. Read, reply yourself, or let the AI answer. Turn the AI off per chat to take over. |
 | **Knowledge base** | Upload PDF / Word / text files, add web pages, or type notes. The AI answers only from this. A "Try it" box lets you test answers. |
 | **Redirects** | Rules like "when the customer wants to buy → send +971…" or "→ send https://…". |
+| **Email forwarding** | Forward matching emails (by keywords or by AI) to team members, with attachments. |
 | **Channels** | WhatsApp (QR scan, like WhatsApp Web), Telegram bot, any number of email accounts (Gmail or your domain, IMAP/SMTP), Facebook + Instagram (official Meta API). |
 | **Overview** | Today's numbers, channel status, AI engine status and a getting-started checklist. |
 | **AI engine** | Installed models with sizes, live download progress, suggested models, and where the files are stored. |
@@ -52,6 +53,17 @@ If Ollama is installed directly (not in Docker), its models folder is `%USERPROF
 
 > On a Mac, Ollama inside Docker cannot use the Apple GPU. For much faster replies install the Ollama app on the Mac itself, remove the `ollama` service from `docker-compose.yml`, and set `OLLAMA_URL=http://host.docker.internal:11434` in `.env`.
 
+## Making replies faster
+
+Open **AI engine → Speed**. It shows whether the model runs on the graphics card (GPU) or only on the processor (CPU), and how long each reply took: loading the model, reading the question, and writing the answer.
+
+- **The model stays loaded.** The app keeps the models in memory for 24 hours between messages and loads them when it starts, so only the very first reply waits for loading.
+- **Use the graphics card.** On the processor alone a 7B model can need a minute or more per reply; on a GPU it is a few seconds.
+  - *NVIDIA card with Docker:* update the NVIDIA driver, then start with
+    `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`
+  - *Windows, easiest and fastest (NVIDIA or AMD):* install the [Ollama app for Windows](https://ollama.com/download/windows), which uses the card automatically. Copy the models into it so nothing downloads again: copy the contents of `ollama-models` into `%USERPROFILE%\.ollama\models`. Then add `OLLAMA_URL=http://host.docker.internal:11434` to `.env` and start only the dashboard with `docker compose up -d --no-deps app` (stop the Docker Ollama first with `docker compose stop ollama`).
+- **No graphics card?** Pick the smaller `qwen2.5:3b` on the AI engine page: about twice as fast, with simpler answers.
+
 ## Running without Docker
 
 Requirements: Node.js 20+ and [Ollama](https://ollama.com/download).
@@ -88,6 +100,9 @@ Channels → Email → **Add account**.
 - **Custom domain**: use the IMAP/SMTP servers from your host (usually `mail.yourdomain.com`, IMAP 993 SSL, SMTP 465 SSL or 587 with SSL off).
 
 Click **Test connection**, then **Save**. Only emails that arrive after the account is added get answered; newsletters, no-reply senders and auto-replies are skipped. Replies go out in the same thread.
+
+### Email forwarding rules
+Under **Email forwarding** you decide which emails go to which people, for example invoices to accounting and CVs to HR. A rule matches either by **keywords** (instant, e.g. `invoice, payment, فاتورة`) or by a description the **AI** understands (e.g. "job applications and CVs"). Matching emails are forwarded with their attachments from the same mailbox, with Reply-To set to the customer so your colleague can answer them directly. Per rule you choose whether the AI still replies to the customer or leaves it to the team. Each forward shows as a note in the conversation, and **Try a sample email** shows which rules would fire.
 
 ### Facebook Messenger & Instagram (when you have the API access)
 The integration is built and waits for your credentials:

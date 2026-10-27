@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS redirects (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS email_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  match_type TEXT NOT NULL DEFAULT 'keywords', -- keywords | ai
+  match_text TEXT NOT NULL,         -- comma-separated keywords, or a description for the AI
+  match_field TEXT NOT NULL DEFAULT 'any',     -- any | from | subject | body (keywords only)
+  forward_to TEXT NOT NULL,         -- comma-separated addresses
+  account_id INTEGER,               -- NULL = all email accounts
+  ai_reply INTEGER NOT NULL DEFAULT 1,         -- still let the AI answer the customer
+  include_attachments INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS email_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

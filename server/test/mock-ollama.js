@@ -31,13 +31,21 @@ export function startMockOllama() {
       }
       return res.end(JSON.stringify({ status: 'success' }) + '\n');
     }
+    if (req.url === '/api/ps') return res.end(JSON.stringify({ models: [{ name: 'qwen2.5:7b', size: 6e9, size_vram: 0 }] }));
     if (req.url === '/api/delete') return res.end('{}');
     if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'qwen2.5:7b', size: 4683087332, details: { parameter_size: '7.6B', quantization_level: 'Q4_K_M' } }, { name: 'bge-m3:latest', size: 1157672605, details: { parameter_size: '566.70M' } }] }));
     if (req.url === '/api/embed') return res.end(JSON.stringify({ embeddings: data.input.map(vec) }));
     if (req.url === '/api/chat') {
-      const system = data.messages[0].content;
+      await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHAT_DELAY || 0)));
+      const system = data.messages[0]?.content || '';
+      if (system.includes('forwarding rules')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: /invoice/i.test(system.split('Email:')[1]) ? '1' : 'none' } }));
+      }
       const knows = system.includes('9am to 6pm');
-      return res.end(JSON.stringify({ message: { role: 'assistant', content: knows ? 'We are open 9am to 6pm.' : 'I am not sure.' } }));
+      return res.end(JSON.stringify({
+        message: { role: 'assistant', content: knows ? 'We are open 9am to 6pm.' : 'I am not sure.' },
+        load_duration: 42e9, prompt_eval_count: 1450, prompt_eval_duration: 38e9, eval_count: 60, eval_duration: 12e9,
+      }));
     }
     res.statusCode = 404;
     res.end('{}');
