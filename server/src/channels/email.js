@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import { db } from '../db.js';
 import { handleIncoming, registerSender, addNote, scheduleAutoReply } from '../inbox.js';
 import { matchRules, forward } from './email-rules.js';
+import { registerEmailSender } from '../handoff.js';
 
 const clients = new Map(); // account id -> { client, stopped, status, error }
 let notify = () => {};
@@ -221,4 +222,10 @@ registerSender('email', async (conv, text) => {
     headers: { 'Auto-Submitted': 'auto-replied' },
   });
   return { externalId: info.messageId };
+});
+
+registerEmailSender(async (to, subject, text) => {
+  const account = db.prepare('SELECT * FROM email_accounts WHERE enabled = 1 ORDER BY id LIMIT 1').get();
+  if (!account) throw new Error('No email account is set up');
+  await transport(account).sendMail({ from: { name: account.name, address: account.email }, to, subject, text });
 });

@@ -10,6 +10,10 @@ import { answer } from '../ai/agent.js';
 import * as ollama from '../ai/ollama.js';
 import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
+import { handOff } from '../handoff.js';
+import { speechStatus, loadModel } from '../ai/speech.js';
+import { MEDIA_DIR } from '../voice.js';
+import path from 'node:path';
 import { logoutWhatsApp } from '../channels/whatsapp.js';
 import { listAccounts, testAccount, PRESETS } from '../channels/email.js';
 import { listRules, validateRule, matchRules } from '../channels/email-rules.js';
@@ -58,6 +62,14 @@ api.post('/conversations/:id/ai-reply', wrap(async (req, res) => {
   await replyNow(Number(req.params.id));
   res.json({ ok: true });
 }));
+api.post('/conversations/:id/handoff', wrap(async (req, res) => {
+  const results = await handOff(Number(req.params.id), { reason: 'manual' });
+  res.json(results.map((r) => ({ name: r.member.name, via: r.via, error: r.error || null })));
+}));
+api.get('/media/:file', (req, res) => {
+  const file = path.basename(req.params.file);
+  res.sendFile(path.join(MEDIA_DIR, file), (err) => err && !res.headersSent && res.sendStatus(404));
+});
 api.delete('/conversations/:id', (req, res) => {
   db.prepare('DELETE FROM conversations WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
@@ -202,11 +214,17 @@ api.put('/settings', wrap(async (req, res) => {
   if ('whatsapp' in body && body.whatsapp.enabled !== before.whatsapp.enabled) restart.whatsapp();
   if (body.embed_model && body.embed_model !== before.embed_model) reindexAll();
   if (body.chat_model && body.chat_model !== before.chat_model) ollama.warmUp();
+  if (body.voice?.enabled && (body.voice.model !== before.voice.model || !before.voice.enabled)) loadModel().catch(() => {});
   emit('channels', channelStatus());
   res.json(maskedSettings());
 }));
 
 // --- AI engine ---
+api.get('/speech/status', (req, res) => res.json(speechStatus()));
+api.post('/speech/load', (req, res) => {
+  loadModel().catch(() => {});
+  res.json({ ok: true });
+});
 api.get('/ai/status', wrap(async (req, res) => res.json(await ollama.status())));
 api.post('/ai/pull', (req, res) => {
   const model = req.body?.model;

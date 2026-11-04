@@ -43,6 +43,12 @@ export function startMockOllama() {
       }
       const knows = system.includes('9am to 6pm');
       const lastUser = [...data.messages].reverse().find((m) => m.role === 'user')?.content || '';
+      if (lastUser.includes('Write a brief for our sales team')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Wants 3 iPhone 16 phones, delivery to Dubai this week.' } }));
+      }
+      if (/want to buy/i.test(lastUser)) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Great choice! A member of our sales team will contact you shortly. [HANDOFF]' } }));
+      }
       if (/what is toptech/i.test(lastUser)) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'TopTech是我们提供最新科技产品的商店。' } }));
       }

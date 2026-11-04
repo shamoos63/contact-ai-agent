@@ -179,6 +179,7 @@ function TestBox() {
       {result?.reply && (
         <div className="test-result">
           <div className="bubble" dir="auto">{result.reply}</div>
+          {result.handoff && <div className="small ok">✓ This message would be sent to your sales team.</div>}
           <div className="small muted">
             Used: {result.sources.length ? result.sources.map((s) => `${s.title} (${Math.round(s.score * 100)}%)`).join(', ') : 'no knowledge matched'}
           </div>

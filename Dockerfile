@@ -9,10 +9,13 @@ RUN npm run build
 # --- Server ---
 FROM node:22-bookworm-slim
 WORKDIR /app/server
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+# ffmpeg reads WhatsApp/Telegram voice notes for speech-to-text.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 COPY server/package*.json ./
-RUN npm ci --omit=dev
+# The speech engine ships binaries for every OS; keep only Linux to save ~200 MB.
+RUN npm ci --omit=dev \
+  && rm -rf node_modules/onnxruntime-node/bin/napi-v*/darwin node_modules/onnxruntime-node/bin/napi-v*/win32
 COPY server/ ./
 COPY --from=client /app/client/dist /app/client/dist
 

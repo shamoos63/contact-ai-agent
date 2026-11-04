@@ -170,3 +170,76 @@ test('replies stay in the customer language and Chinese drift is retried', async
   assert.match(last.data.messages[0].content, /reply in English only/);
   assert.match(last.data.messages.at(-1).content, /in English only/);
 });
+
+test('voice notes are decoded with ffmpeg, transcribed and answered', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const speech = await import('../src/ai/speech.js');
+  const { handleVoiceNote } = await import('../src/voice.js');
+  // A real 1.5 second Ogg Opus file, like a WhatsApp voice note.
+  const ogg = execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1.5', '-c:a', 'libopus', '-f', 'ogg', 'pipe:1']);
+  const samples = await speech.decodeAudio(ogg);
+  assert.ok(Math.abs(samples.length - 24000) < 1600, `got ${samples.length} samples`);
+
+  let gotSamples = 0;
+  speech._setPipelineForTests(async (audio, opts) => {
+    gotSamples = audio.length;
+    assert.equal(opts.task, 'transcribe');
+    return { text: ' What are your opening hours? ' };
+  });
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  await handleVoiceNote({ channel: 'whatsapp', externalId: '971500000001@s.whatsapp.net', name: 'Omar', handle: '+971500000001', messageId: 'v1', buffer: ogg, ext: 'ogg', duration: 2 });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(gotSamples > 20000);
+  const conv = mods.inbox.listConversations({ channel: 'whatsapp' })[0];
+  const [msg] = mods.inbox.listMessages(conv.id);
+  assert.equal(msg.text, 'What are your opening hours?');
+  const meta = JSON.parse(msg.meta);
+  assert.equal(meta.voice, true);
+  assert.ok(fs.existsSync(path.join(dataDir, 'media', meta.audio)));
+  assert.deepEqual(sent, ['We are open 9am to 6pm.']);
+});
+
+test('voice note that cannot be read is kept with a note and no AI reply', async () => {
+  const { handleVoiceNote } = await import('../src/voice.js');
+  await handleVoiceNote({ channel: 'telegram', externalId: '77', name: 'Nour', handle: '@nour', messageId: '77:1', buffer: Buffer.from('not audio'), ext: 'ogg', duration: 1 });
+  const conv = mods.inbox.listConversations({ channel: 'telegram' }).find((c) => c.external_id === '77');
+  const msgs = mods.inbox.listMessages(conv.id);
+  assert.equal(msgs[0].text, '🎤 Voice note');
+  assert.equal(msgs[1].direction, 'note');
+  assert.match(msgs[1].text, /Could not turn this voice note into text/);
+  assert.equal(msgs.length, 2);
+});
+
+test('sales handoff sends the number and a brief to the team, once', async () => {
+  const handoff = await import('../src/handoff.js');
+  mods.settings.setSetting('sales_handoff', { enabled: true, team: [{ name: 'Rami', phone: '+971 55 123 4567' }], brief_language: 'English', cooldown_hours: 24 });
+  const leads = [];
+  handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  assert.equal(handoff.isTeamNumber('971551234567'), true);
+  assert.match(mods.agent.buildSystemPrompt([]), /\[HANDOFF\]/);
+
+  const msg = { channel: 'whatsapp', externalId: '971501112222@s.whatsapp.net', name: 'Huda', handle: '+971501112222', convMeta: { phone: '+971501112222' } };
+  mods.inbox.handleIncoming({ ...msg, text: 'I want to buy 3 iPhone 16', messageId: 's1' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual(sent, ['Great choice! A member of our sales team will contact you shortly.']);
+  assert.equal(leads.length, 1);
+  assert.equal(leads[0].phone, '+971 55 123 4567');
+  assert.match(leads[0].text, /New sales lead/);
+  assert.match(leads[0].text, /Huda/);
+  assert.match(leads[0].text, /https:\/\/wa\.me\/971501112222/);
+  assert.match(leads[0].text, /Wants 3 iPhone 16 phones/);
+
+  mods.inbox.handleIncoming({ ...msg, text: 'I want to buy a case too', messageId: 's2' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(leads.length, 1, 'cooldown stops a second automatic handoff');
+  const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
+  assert.equal(conv.meta.salesLead, true);
+  assert.ok(mods.inbox.listMessages(conv.id).some((m) => m.direction === 'note' && /Sent to sales: Rami/.test(m.text)));
+
+  await handoff.handOff(conv.id, { reason: 'manual' });
+  assert.equal(leads.length, 2, 'the manual button always sends');
+  mods.settings.setSetting('sales_handoff', { enabled: false, team: [] });
+});

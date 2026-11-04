@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pino from 'pino';
 import QRCode from 'qrcode';
-import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, Browsers } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, Browsers, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { DATA_DIR } from '../config.js';
 import { getSetting } from '../settings.js';
 import { handleIncoming, registerSender } from '../inbox.js';
+import { handleVoiceNote } from '../voice.js';
+import { isTeamNumber, registerWhatsAppSender } from '../handoff.js';
 
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp-auth');
 const logger = pino({ level: 'silent' });
@@ -88,19 +90,44 @@ export async function startWhatsApp(onChange) {
     for (const m of messages) {
       const jid = m.key.remoteJid;
       if (m.key.fromMe || !jid || jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter')) continue;
-      const text = textOf(m.message);
-      if (!text) continue;
       const phoneJid = m.key.senderPn || m.key.remoteJidAlt || (jid.endsWith('@s.whatsapp.net') ? jid : null);
-      handleIncoming({
+      const phone = phoneJid ? '+' + phoneJid.split('@')[0] : null;
+      const sender = {
         channel: 'whatsapp',
         externalId: jid,
         name: m.pushName,
-        handle: phoneJid ? '+' + phoneJid.split('@')[0] : jid.split('@')[0],
-        text,
+        handle: phone || jid.split('@')[0],
         messageId: m.key.id,
-      });
+        convMeta: phone ? { phone } : undefined,
+        // Messages from our own sales team land in the inbox but the AI doesn't answer them.
+        autoReply: !isTeamNumber(phone),
+      };
+      const inner = m.message?.ephemeralMessage?.message || m.message?.viewOnceMessage?.message || m.message;
+      const audio = inner?.audioMessage;
+      if (audio) {
+        // Not awaited: transcribing can take a while and must not hold up other chats.
+        downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: socket.updateMediaMessage })
+          .then((buffer) => handleVoiceNote({ ...sender, buffer, ext: 'ogg', duration: audio.seconds }))
+          .catch((err) => console.error('[whatsapp] Voice note failed:', err.message));
+        continue;
+      }
+      const text = textOf(m.message);
+      if (!text) continue;
+      handleIncoming({ ...sender, text });
     }
   });
+}
+
+// Send a WhatsApp message to any number, e.g. a lead brief to a sales team member.
+export async function sendWhatsAppTo(phone, text) {
+  if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
+  const digits = String(phone).replace(/\D/g, '');
+  if (digits.length < 7) throw new Error(`"${phone}" is not a valid phone number`);
+  await sock.sendMessage(`${digits}@s.whatsapp.net`, { text });
+}
+
+export function whatsappConnected() {
+  return !!sock && state.status === 'connected';
 }
 
 export async function stopWhatsApp() {
@@ -130,3 +157,5 @@ registerSender('whatsapp', async (conv, text) => {
   const sent = await sock.sendMessage(conv.external_id, { text });
   return { externalId: sent?.key?.id };
 });
+
+registerWhatsAppSender(sendWhatsAppTo);
