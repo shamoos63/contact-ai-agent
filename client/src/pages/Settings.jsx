@@ -121,9 +121,10 @@ function SalesHandoff() {
         <label className="switch"><input type="checkbox" checked={!!h.enabled} onChange={(e) => setH({ ...h, enabled: e.target.checked })} /><span>On</span></label>
       </div>
       <p className="muted small">
-        When a customer wants to buy, the AI tells them the sales team will contact them, and sends the customer's name, number and a
-        short summary of the chat to these people on WhatsApp (and email if you add one). You can also send any chat by hand with
-        "Send to sales" in the inbox.
+        When a customer wants to buy, the AI first asks what they need (product, quantity, budget, city). When they answer, it tells
+        them the sales manager will contact them, and sends the customer's name, number and a short summary of what they need to these
+        people on WhatsApp (and email if you add one). The customer is never given the sales team's own number. You can also send any
+        chat by hand with "Send to sales" in the inbox.
       </p>
       <label>
         Hand off when the customer…

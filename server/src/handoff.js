@@ -7,7 +7,9 @@ import { emit } from './realtime.js';
 // Sales handoff: when a customer wants to buy, send their contact details and a short brief
 // to the sales team on WhatsApp (and/or email), so a person can follow up.
 
-export const HANDOFF_TAG = /\[\s*HANDOFF\s*\]/gi;
+// The model marks its reply with [SALES] when it asked the customer what they need,
+// and [HANDOFF] when the request is ready to pass to the sales team.
+const TAGS = /\[\s*(HANDOFF|SALES)\s*\]/gi;
 
 const digitsOf = (phone) => String(phone || '').replace(/\D/g, '');
 
@@ -15,22 +17,81 @@ export function teamMembers() {
   return (getSetting('sales_handoff').team || []).filter((m) => m.name || m.phone || m.email);
 }
 
+export function handoffEnabled() {
+  return !!getSetting('sales_handoff').enabled && teamMembers().length > 0;
+}
+
 export function isTeamNumber(phone) {
   const d = digitsOf(phone);
   return !!d && teamMembers().some((m) => digitsOf(m.phone) === d);
 }
 
-export function handoffPrompt() {
-  const s = getSetting('sales_handoff');
-  if (!s.enabled || !teamMembers().length) return null;
-  return `SALES HANDOFF: If ${s.when}, answer what you can, tell the customer that a member of our sales team will contact them shortly, and put the tag [HANDOFF] at the very end of your reply.`;
+// While handoff is on, the customer must never be given the sales team's own contact, so redirect
+// rules about sales, or that point at a team member's number, are left out of the prompt.
+const SALES_WORDS = /sale|sell|buy|purchas|مبيع|شراء|اشتر|بيع/i;
+export function allowRedirect(rule) {
+  if (!handoffEnabled()) return true;
+  if (SALES_WORDS.test(`${rule.name} ${rule.when_text}`)) return false;
+  const value = digitsOf(rule.value);
+  return !teamMembers().some((m) => {
+    const d = digitsOf(m.phone).slice(-9);
+    return d.length >= 7 && value.includes(d);
+  });
 }
 
-// Remove the tag from a reply and say whether it was there.
-export function takeHandoffTag(reply) {
-  const tagged = HANDOFF_TAG.test(reply);
-  HANDOFF_TAG.lastIndex = 0;
-  return { reply: reply.replace(HANDOFF_TAG, '').trim(), tagged };
+function recentlyHandedOff(conv) {
+  const hours = getSetting('sales_handoff').cooldown_hours || 24;
+  return conv?.meta?.lastHandoffAt && Date.now() - conv.meta.lastHandoffAt < hours * 3600e3;
+}
+
+// A sales request is "asking" after the AI asked the customer what they need (valid for a day).
+export function salesStage(conv) {
+  const m = conv?.meta || {};
+  if (m.salesStage === 'asking' && Date.now() - (m.salesAskedAt || 0) < 24 * 3600e3) return 'asking';
+  return null;
+}
+
+// The part of the system prompt that drives the sales conversation.
+export function handoffPrompt(conv) {
+  if (!handoffEnabled()) return null;
+  const s = getSetting('sales_handoff');
+  const noContact = 'Never give the customer a phone number, WhatsApp link or any contact of our sales team: our sales manager contacts the customer.';
+  if (salesStage(conv) === 'asking') {
+    return [
+      'SALES REQUEST IN PROGRESS: You already asked this customer what they need. Their latest message is their answer.',
+      'Thank them, repeat in one short line what they need, and tell them our sales manager will contact them shortly on this number.',
+      `Do not ask more questions. ${noContact} End your reply with the tag [HANDOFF].`,
+    ].join(' ');
+  }
+  if (recentlyHandedOff(conv)) {
+    return `SALES: This customer was already passed to our sales manager. If they ask about buying, tell them the sales manager will contact them soon. ${noContact}`;
+  }
+  return [
+    `SALES REQUESTS: When ${s.when}, follow these steps instead of any redirect rule. ${noContact}`,
+    '1. If the customer has not yet said exactly what they need, ask them in one short friendly message (for example: which product or service, how many, budget, delivery city). End that reply with the tag [SALES].',
+    '2. If they already explained what they need, thank them, repeat in one line what they need, say our sales manager will contact them shortly on this number, and end the reply with the tag [HANDOFF].',
+  ].join('\n');
+}
+
+// Remove the tags from a reply and say which one was there.
+export function takeTags(reply) {
+  let tag = null;
+  for (const m of reply.matchAll(TAGS)) tag = m[1].toUpperCase() === 'HANDOFF' || tag === 'handoff' ? 'handoff' : 'sales';
+  return { reply: reply.replace(TAGS, '').replace(/[ \t]+\n/g, '\n').trim(), tag };
+}
+
+// What to do after the AI replied: remember that it asked about needs, or hand off.
+export async function afterReply(conversationId, tag) {
+  const conv = getConversation(conversationId);
+  if (!conv || !handoffEnabled()) return;
+  if (salesStage(conv) === 'asking' || tag === 'handoff') {
+    // In the "asking" stage the customer just answered, so hand off even if the model forgot the tag.
+    if (!recentlyHandedOff(conv)) await handOff(conversationId);
+    updateMeta(conversationId, { salesStage: null });
+  } else if (tag === 'sales' && !recentlyHandedOff(conv)) {
+    updateMeta(conversationId, { salesStage: 'asking', salesAskedAt: Date.now() });
+    addNote(conversationId, 'Sales request: asked the customer what they need. Their answer goes to the sales team.');
+  }
 }
 
 // How the team can reach the customer, per channel.
@@ -66,7 +127,7 @@ async function writeBrief(conv, language) {
     }],
     { temperature: 0.2 },
   );
-  return brief.replace(HANDOFF_TAG, '').trim();
+  return takeTags(brief).reply;
 }
 
 // Optional email delivery, through the first working email account.
@@ -127,7 +188,7 @@ export async function handOff(conversationId, { reason = 'auto' } = {}) {
     }
   }
   const ok = results.filter((r) => !r.error);
-  updateMeta(conversationId, { salesLead: true, lastHandoffBrief: brief });
+  updateMeta(conversationId, { salesLead: true, salesStage: null, lastHandoffBrief: brief });
   for (const r of results) {
     addNote(conversationId, r.error
       ? `Could not send the lead to ${r.member.name || r.member.phone || r.member.email} by ${r.via}: ${r.error}`

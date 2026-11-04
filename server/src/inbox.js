@@ -2,7 +2,7 @@ import { db } from './db.js';
 import { emit } from './realtime.js';
 import { getSetting } from './settings.js';
 import { generateReply } from './ai/agent.js';
-import { handOff } from './handoff.js';
+import { afterReply } from './handoff.js';
 
 const senders = new Map(); // channel -> async (conversation, text) => { externalId? }
 
@@ -99,11 +99,11 @@ export function scheduleAutoReply(conversationId) {
 async function autoReply(conversationId, { force = false } = {}) {
   emit('typing', { conversationId, typing: true });
   try {
-    const { reply, sources, handoff } = await generateReply(conversationId);
+    const { reply, sources, tag } = await generateReply(conversationId);
     // A human may have taken over while the model was thinking.
     if (!force && !conversationRow(conversationId).auto_reply) return;
     await sendMessage(conversationId, reply, { sender: 'ai', meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })) } });
-    if (handoff) handOff(conversationId).catch((err) => addNote(conversationId, `Sales handoff failed: ${err.message}`));
+    afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Sales handoff failed: ${err.message}`));
   } finally {
     emit('typing', { conversationId, typing: false });
   }
