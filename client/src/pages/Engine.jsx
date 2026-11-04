@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge } from 'lucide-react';
+import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge, Mic } from 'lucide-react';
+import { getSocket } from '../api.js';
 import { api, formatBytes } from '../api.js';
 import { useEngine } from '../useEngine.js';
-import { PageHeader, Pill, DownloadProgress } from '../components/ui.jsx';
+import { PageHeader, Pill, DownloadProgress, ProgressBar } from '../components/ui.jsx';
 
 export default function Engine() {
   const [engine, reload] = useEngine(5000);
@@ -134,6 +135,8 @@ export default function Engine() {
         <CustomModel onPull={pull} disabled={!engine.online} />
       </section>
 
+      <VoiceCard />
+
       <FilesCard path={engine.modelsPath} />
     </div>
   );
@@ -223,6 +226,81 @@ function SpeedCard({ engine, chatModel }) {
         </table>
       )}
       {tips.map((t) => <div key={t} className="alert warn small">{t}</div>)}
+    </section>
+  );
+}
+
+function VoiceCard() {
+  const [v, setV] = useState(null);
+  const [saved, setSaved] = useState('');
+  useEffect(() => {
+    api('/speech/status').then(setV);
+    const socket = getSocket();
+    socket.on('speech', setV);
+    return () => socket.off('speech', setV);
+  }, []);
+  if (!v) return null;
+  const save = async (patch) => {
+    await api('/settings', { method: 'PUT', body: { voice: { ...v.settings, ...patch } } });
+    setV(await api('/speech/status'));
+    setSaved('Saved ✓');
+    setTimeout(() => setSaved(''), 1500);
+  };
+  const p = v.progress;
+  const statusPill = {
+    idle: <Pill tone="muted">Not loaded</Pill>,
+    loading: <Pill tone="warn">{p ? 'Downloading' : 'Loading'}</Pill>,
+    ready: <Pill tone="ok">Ready</Pill>,
+    error: <Pill tone="error" title={v.error}>Error</Pill>,
+  }[v.status];
+  return (
+    <section className="card stack">
+      <div className="card-head">
+        <h3><Mic size={16} /> Voice notes</h3>
+        <span className="row">{v.settings.enabled && statusPill} <span className="ok small">{saved}</span></span>
+      </div>
+      <p className="muted small">
+        Voice notes from WhatsApp and Telegram are turned into text on this computer (with OpenAI's free Whisper model), so the AI can
+        answer them. You can still play the recording in the inbox.
+      </p>
+      <label className="switch">
+        <input type="checkbox" checked={!!v.settings.enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+        <span>Turn voice notes into text</span>
+      </label>
+      {v.settings.enabled && (
+        <>
+          <div className="grid2">
+            <label>
+              Speech model
+              <select value={v.settings.model} onChange={(e) => save({ model: e.target.value })}>
+                {v.models.map((m) => <option key={m.id} value={m.id}>{m.label} (≈ {formatBytes(m.size)})</option>)}
+              </select>
+              <small className="muted">{v.models.find((m) => m.id === v.settings.model)?.note}</small>
+            </label>
+            <label>
+              Language of the voice notes
+              <select value={v.settings.language} onChange={(e) => save({ language: e.target.value })}>
+                <option value="auto">Detect automatically</option>
+                <option value="arabic">Always Arabic</option>
+                <option value="english">Always English</option>
+              </select>
+              <small className="muted">If most notes are Arabic, "Always Arabic" gives better results.</small>
+            </label>
+          </div>
+          {v.status === 'loading' && p && (
+            <div className="download">
+              <ProgressBar value={(p.loaded / p.total) * 100} />
+              <div className="small muted">{formatBytes(p.loaded)} of {formatBytes(p.total)}</div>
+            </div>
+          )}
+          {v.status === 'error' && (
+            <div className="alert error small">
+              {v.error} <button type="button" className="link" onClick={() => api('/speech/load', { method: 'POST' })}>Try again</button>
+            </div>
+          )}
+          <small className="muted">Model files are kept in <code>data/speech-models</code> inside the project folder.</small>
+        </>
+      )}
     </section>
   );
 }

@@ -18,6 +18,14 @@ const DEFAULTS = {
   context_size: 4096,
   telegram: { enabled: false, token: '' },
   whatsapp: { enabled: false },
+  voice: { enabled: true, model: 'onnx-community/whisper-small', language: 'auto' },
+  sales_handoff: {
+    enabled: false,
+    when: 'the customer wants to buy, asks for prices or a quote, or asks for more sales details',
+    team: [],
+    brief_language: 'English',
+    cooldown_hours: 24,
+  },
   meta: {
     enabled: false,
     verify_token: '',

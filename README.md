@@ -11,6 +11,8 @@ Everything runs on your own computer with free, local AI ([Ollama](https://ollam
 | **Shared inbox** | All conversations from every channel in one place, live. Read, reply yourself, or let the AI answer. Turn the AI off per chat to take over. |
 | **Knowledge base** | Upload PDF / Word / text files, add web pages, or type notes. The AI answers only from this. A "Try it" box lets you test answers. |
 | **Redirects** | Rules like "when the customer wants to buy → send +971…" or "→ send https://…". |
+| **Sales handoff** | Sends a buying customer's number and a short brief to your sales team on WhatsApp. |
+| **Voice notes** | WhatsApp/Telegram voice notes are transcribed locally (Whisper) so the AI can answer them. |
 | **Email forwarding** | Forward matching emails (by keywords or by AI) to team members, with attachments. |
 | **Channels** | WhatsApp (QR scan, like WhatsApp Web), Telegram bot, any number of email accounts (Gmail or your domain, IMAP/SMTP), Facebook + Instagram (official Meta API). |
 | **Overview** | Today's numbers, channel status, AI engine status and a getting-started checklist. |
@@ -100,6 +102,12 @@ Channels → Email → **Add account**.
 - **Custom domain**: use the IMAP/SMTP servers from your host (usually `mail.yourdomain.com`, IMAP 993 SSL, SMTP 465 SSL or 587 with SSL off).
 
 Click **Test connection**, then **Save**. Only emails that arrive after the account is added get answered; newsletters, no-reply senders and auto-replies are skipped. Replies go out in the same thread.
+
+### Voice notes
+Voice notes on WhatsApp and Telegram are turned into text on your own computer with OpenAI's free **Whisper** model, so the AI answers them like typed messages. The recording can still be played in the inbox. Pick the model under **AI engine → Voice notes**: *Small* (≈ 600 MB, recommended), *Base* (faster, weaker Arabic) or *Large v3 turbo* (best Arabic, needs a strong machine). It downloads once from huggingface.co into `data/speech-models`. If most customers speak Arabic, set the language to "Always Arabic".
+
+### Sales handoff
+Under **Settings → Sales handoff**, add your sales people (name, WhatsApp number with country code, optional email) and describe when to hand off (default: the customer wants to buy, asks for prices or a quote, or more sales details). When that happens the AI tells the customer the sales team will contact them, and sends the team a WhatsApp message with the customer's name, a tap-to-chat `wa.me` link and a 2–4 line summary of the chat. The same customer isn't sent twice within 24 hours (adjustable). The **Send to sales** button in the inbox does it by hand for any chat. Leads are sent from your connected WhatsApp number, and the AI never answers messages coming from team numbers.
 
 ### Email forwarding rules
 Under **Email forwarding** you decide which emails go to which people, for example invoices to accounting and CVs to HR. A rule matches either by **keywords** (instant, e.g. `invoice, payment, فاتورة`) or by a description the **AI** understands (e.g. "job applications and CVs"). Matching emails are forwarded with their attachments from the same mailbox, with Reply-To set to the customer so your colleague can answer them directly. Per rule you choose whether the AI still replies to the customer or leaves it to the team. Each forward shows as a note in the conversation, and **Try a sample email** shows which rules would fire.

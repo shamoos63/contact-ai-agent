@@ -11,6 +11,8 @@ import { api } from './routes/api.js';
 import { verifyWebhook, receiveWebhook } from './channels/meta.js';
 import { startChannels, stopChannels } from './channels/index.js';
 import { ensureModels } from './ai/ollama.js';
+import { loadModel } from './ai/speech.js';
+import { getSetting } from './settings.js';
 
 ensureAdmin();
 
@@ -42,6 +44,8 @@ server.listen(config.port, () => {
   console.log(`[server] Dashboard on http://localhost:${config.port}`);
   startChannels();
   ensureModels();
+  // Get the voice model ready (downloads it the first time) so the first voice note isn't slow.
+  if (getSetting('voice').enabled) loadModel().catch(() => {});
 });
 
 async function shutdown() {

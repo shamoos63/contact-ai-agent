@@ -2,6 +2,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from './ollama.js';
 import { search } from '../kb/index.js';
+import { handoffPrompt, takeHandoffTag } from '../handoff.js';
 
 export function redirectRules() {
   return db.prepare('SELECT * FROM redirects WHERE enabled = 1 ORDER BY id').all();
@@ -42,6 +43,8 @@ export function buildSystemPrompt(knowledge, language = 'English') {
     parts.push('', 'REDIRECT RULES (when a rule applies, include its exact link or phone number in your reply):');
     for (const r of rules) parts.push(`- ${r.name}: when ${r.when_text} -> give the customer: ${r.value}`);
   }
+  const handoff = handoffPrompt();
+  if (handoff) parts.push('', handoff);
   parts.push('', 'COMPANY KNOWLEDGE:');
   if (knowledge.length) knowledge.forEach((k, i) => parts.push(`[${i + 1}] (${k.title}) ${k.text}`));
   else parts.push('(no relevant knowledge found for this question)');
@@ -73,14 +76,14 @@ export async function answer(messages) {
     // A last reminder right before the answer is what keeps small models in the right language.
     { role: 'system', content: `Answer the customer now, in ${language} only.` },
   ];
-  let reply = await chat(prompt);
+  let { reply, tagged } = takeHandoffTag(await chat(prompt));
   if (reply && wrongLanguage(reply, language)) {
     console.warn(`[agent] Reply was not in ${language}, asking again`);
-    reply = await chat(
+    reply = takeHandoffTag(await chat(
       [...prompt, { role: 'assistant', content: reply }, { role: 'user', content: `Please write that again in ${language} only.` }],
       { temperature: 0 },
-    );
+    )).reply;
     if (wrongLanguage(reply, language)) reply = '';
   }
-  return { reply: reply || getSetting('fallback_message'), sources: knowledge, language };
+  return { reply: reply || getSetting('fallback_message'), sources: knowledge, language, handoff: tagged };
 }

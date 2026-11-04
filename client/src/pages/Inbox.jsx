@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Search, Send, Bot, UserRound, MessageSquare } from 'lucide-react';
+import { Search, Send, Bot, UserRound, MessageSquare, Mic, BadgeDollarSign } from 'lucide-react';
 import { api, getSocket, CHANNELS, timeAgo, formatTime } from '../api.js';
 import { Avatar, ChannelTag } from '../components/ui.jsx';
 
@@ -65,6 +65,7 @@ export default function Inbox() {
             <span className="conv-side">
               {c.unread > 0 && <span className="badge">{c.unread}</span>}
               {!c.auto_reply && <span className="tag-soft" title="AI is paused, a human is handling this chat">You</span>}
+              {c.meta?.salesLead && <span className="tag-lead" title="Sent to the sales team">Lead</span>}
             </span>
           </button>
         ))}
@@ -81,6 +82,7 @@ function Conversation({ id }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
+  const [handingOff, setHandingOff] = useState(false);
   const [error, setError] = useState('');
   const bottom = useRef(null);
 
@@ -128,6 +130,18 @@ function Conversation({ id }) {
   };
   const toggleAi = () => api(`/conversations/${id}`, { method: 'PATCH', body: { auto_reply: !conv.auto_reply } });
   const aiReply = () => api(`/conversations/${id}/ai-reply`, { method: 'POST' }).catch((err) => setError(err.message));
+  const handoff = async () => {
+    setError('');
+    setHandingOff(true);
+    try {
+      const results = await api(`/conversations/${id}/handoff`, { method: 'POST' });
+      if (results.length && results.every((r) => r.error)) setError(results.map((r) => `${r.name}: ${r.error}`).join(' · '));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setHandingOff(false);
+    }
+  };
   const toggleStatus = () => api(`/conversations/${id}`, { method: 'PATCH', body: { status: conv.status === 'open' ? 'closed' : 'open' } });
 
   return (
@@ -148,6 +162,9 @@ function Conversation({ id }) {
             <input type="checkbox" checked={!!conv.auto_reply} onChange={toggleAi} />
             <span>AI auto-reply</span>
           </label>
+          <button onClick={handoff} disabled={handingOff} title="Send this customer's contact and a short brief to the sales team">
+            <BadgeDollarSign size={15} /> {handingOff ? 'Sending…' : conv.meta?.salesLead ? 'Send to sales again' : 'Send to sales'}
+          </button>
           <button onClick={toggleStatus}>{conv.status === 'open' ? 'Close' : 'Reopen'}</button>
         </div>
       </header>
@@ -156,7 +173,7 @@ function Conversation({ id }) {
           <div key={m.id} className="note" dir="auto">{m.text} · {formatTime(m.created_at)}</div>
         ) : (
           <div key={m.id} className={`msg ${m.direction} ${m.sender}`}>
-            <div className="bubble" dir="auto">{m.text}</div>
+            <Bubble m={m} />
             <div className="meta small muted">
               {m.sender === 'ai' && <><Bot size={12} /> AI · </>}
               {m.sender === 'agent' && <><UserRound size={12} /> You · </>}
@@ -183,5 +200,19 @@ function Conversation({ id }) {
       </form>
       {error && <div className="error pad">{error}</div>}
     </section>
+  );
+}
+
+function Bubble({ m }) {
+  const meta = typeof m.meta === 'string' ? JSON.parse(m.meta || '{}') : m.meta || {};
+  if (!meta.audio) return <div className="bubble" dir="auto">{m.text}</div>;
+  return (
+    <div className="bubble voice">
+      <audio controls preload="none" src={`/api/media/${meta.audio}`} />
+      <div className="voice-text" dir="auto">
+        <Mic size={13} />
+        {meta.transcribed ? <span>{m.text}</span> : <span className="muted">{meta.transcribeError ? 'Could not turn into text' : 'Not turned into text'}</span>}
+      </div>
+    </div>
   );
 }
