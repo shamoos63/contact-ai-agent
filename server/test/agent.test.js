@@ -211,35 +211,67 @@ test('voice note that cannot be read is kept with a note and no AI reply', async
   assert.equal(msgs.length, 2);
 });
 
-test('sales handoff sends the number and a brief to the team, once', async () => {
+test('sales handoff: asks what the customer needs, then sends number and brief to the team, once', async () => {
   const handoff = await import('../src/handoff.js');
-  mods.settings.setSetting('sales_handoff', { enabled: true, team: [{ name: 'Rami', phone: '+971 55 123 4567' }], brief_language: 'English', cooldown_hours: 24 });
+  mods.settings.setSetting('sales_handoff', { enabled: true, when: 'the customer wants to buy', team: [{ name: 'Rami', phone: '+971 55 123 4567' }], brief_language: 'English', cooldown_hours: 24 });
+  // A redirect that would hand the customer the sales number must not reach the prompt.
+  mods.db.prepare('INSERT INTO redirects (name, when_text, value) VALUES (?, ?, ?)').run('Sales team', 'they want to buy', '+971551234567');
   const leads = [];
   handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
   const sent = [];
   mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
   assert.equal(handoff.isTeamNumber('971551234567'), true);
-  assert.match(mods.agent.buildSystemPrompt([]), /\[HANDOFF\]/);
+  const prompt = mods.agent.buildSystemPrompt([]);
+  assert.match(prompt, /\[SALES\]/);
+  assert.doesNotMatch(prompt, /551234567/);
 
   const msg = { channel: 'whatsapp', externalId: '971501112222@s.whatsapp.net', name: 'Huda', handle: '+971501112222', convMeta: { phone: '+971501112222' } };
-  mods.inbox.handleIncoming({ ...msg, text: 'I want to buy 3 iPhone 16', messageId: 's1' });
+  // 1. Customer asks to buy without details: the AI asks what they need, nothing goes to sales yet.
+  mods.inbox.handleIncoming({ ...msg, text: 'Hi, I want to buy phones', messageId: 's1' });
   await new Promise((r) => setTimeout(r, 400));
-  assert.deepEqual(sent, ['Great choice! A member of our sales team will contact you shortly.']);
+  assert.deepEqual(sent, ['Happy to help! Which product do you need, how many, and to which city?']);
+  assert.equal(leads.length, 0);
+  let conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
+  assert.equal(conv.meta.salesStage, 'asking');
+
+  // 2. Customer answers: the AI thanks them and the lead goes to the sales manager.
+  mods.inbox.handleIncoming({ ...msg, text: '3 iPhone 16 Pro, delivery to Dubai', messageId: 's2' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(sent[1], 'Thank you! Our sales manager will contact you shortly on this number.');
+  assert.ok(!sent.some((t) => t.includes('551234567')), 'the customer never gets the sales number');
   assert.equal(leads.length, 1);
   assert.equal(leads[0].phone, '+971 55 123 4567');
   assert.match(leads[0].text, /New sales lead/);
   assert.match(leads[0].text, /Huda/);
   assert.match(leads[0].text, /https:\/\/wa\.me\/971501112222/);
   assert.match(leads[0].text, /Wants 3 iPhone 16 phones/);
-
-  mods.inbox.handleIncoming({ ...msg, text: 'I want to buy a case too', messageId: 's2' });
-  await new Promise((r) => setTimeout(r, 400));
-  assert.equal(leads.length, 1, 'cooldown stops a second automatic handoff');
-  const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
+  assert.match(leads[0].text, /3 iPhone 16 Pro, delivery to Dubai/);
+  conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
   assert.equal(conv.meta.salesLead, true);
+  assert.equal(conv.meta.salesStage, null);
   assert.ok(mods.inbox.listMessages(conv.id).some((m) => m.direction === 'note' && /Sent to sales: Rami/.test(m.text)));
 
+  // 3. Asking again within the cooldown doesn't send a second lead.
+  mods.inbox.handleIncoming({ ...msg, text: 'I want to buy a case too', messageId: 's3' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(leads.length, 1);
+
+  // 4. The manual button always sends.
   await handoff.handOff(conv.id, { reason: 'manual' });
-  assert.equal(leads.length, 2, 'the manual button always sends');
+  assert.equal(leads.length, 2);
+});
+
+test('sales handoff: a customer who gives details straight away is handed off at once', async () => {
+  const handoff = await import('../src/handoff.js');
+  const leads = [];
+  handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971503334444@s.whatsapp.net', name: 'Sami', handle: '+971503334444', convMeta: { phone: '+971503334444' }, text: 'I want to buy 3 iPhones for Abu Dhabi', messageId: 'd1' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.match(sent[0], /sales manager will contact you/);
+  assert.equal(leads.length, 1);
+  assert.match(leads[0].text, /wa\.me\/971503334444/);
   mods.settings.setSetting('sales_handoff', { enabled: false, team: [] });
+  mods.db.prepare("DELETE FROM redirects WHERE name = 'Sales team'").run();
 });

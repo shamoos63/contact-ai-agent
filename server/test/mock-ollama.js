@@ -46,8 +46,14 @@ export function startMockOllama() {
       if (lastUser.includes('Write a brief for our sales team')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Wants 3 iPhone 16 phones, delivery to Dubai this week.' } }));
       }
-      if (/want to buy/i.test(lastUser)) {
-        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Great choice! A member of our sales team will contact you shortly. [HANDOFF]' } }));
+      if (system.includes('SALES REQUEST IN PROGRESS')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Thank you! Our sales manager will contact you shortly on this number. [HANDOFF]' } }));
+      }
+      if (system.includes('SALES REQUESTS:') && /want to buy/i.test(lastUser)) {
+        const detailed = /\d/.test(lastUser);
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: detailed
+          ? 'Great, 3 iPhones noted. Our sales manager will contact you shortly on this number. [HANDOFF]'
+          : 'Happy to help! Which product do you need, how many, and to which city? [SALES]' } }));
       }
       if (/what is toptech/i.test(lastUser)) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'TopTech是我们提供最新科技产品的商店。' } }));

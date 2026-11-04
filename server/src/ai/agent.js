@@ -2,7 +2,8 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from './ollama.js';
 import { search } from '../kb/index.js';
-import { handoffPrompt, takeHandoffTag } from '../handoff.js';
+import { handoffPrompt, takeTags, allowRedirect } from '../handoff.js';
+import { getConversation } from '../inbox.js';
 
 export function redirectRules() {
   return db.prepare('SELECT * FROM redirects WHERE enabled = 1 ORDER BY id').all();
@@ -28,10 +29,10 @@ function wrongLanguage(reply, language) {
   return language === 'Arabic' && !ARABIC.test(reply);
 }
 
-export function buildSystemPrompt(knowledge, language = 'English') {
+export function buildSystemPrompt(knowledge, language = 'English', conv = null) {
   const company = getSetting('company_name');
   const base = getSetting('system_prompt').replaceAll('{company}', company);
-  const rules = redirectRules();
+  const rules = redirectRules().filter(allowRedirect);
   const parts = [
     base,
     '',
@@ -43,7 +44,7 @@ export function buildSystemPrompt(knowledge, language = 'English') {
     parts.push('', 'REDIRECT RULES (when a rule applies, include its exact link or phone number in your reply):');
     for (const r of rules) parts.push(`- ${r.name}: when ${r.when_text} -> give the customer: ${r.value}`);
   }
-  const handoff = handoffPrompt();
+  const handoff = handoffPrompt(conv);
   if (handoff) parts.push('', handoff);
   parts.push('', 'COMPANY KNOWLEDGE:');
   if (knowledge.length) knowledge.forEach((k, i) => parts.push(`[${i + 1}] (${k.title}) ${k.text}`));
@@ -57,11 +58,12 @@ export async function generateReply(conversationId) {
     .prepare("SELECT direction, sender, text FROM messages WHERE conversation_id = ? AND error IS NULL AND direction <> 'note' ORDER BY id DESC LIMIT 10")
     .all(conversationId)
     .reverse();
-  return answer(history.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text })));
+  const messages = history.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text }));
+  return answer(messages, { conv: getConversation(conversationId) });
 }
 
 // messages: [{ role: 'user' | 'assistant', content }]; the last one should be from the user.
-export async function answer(messages) {
+export async function answer(messages, { conv = null } = {}) {
   const recentUser = messages.filter((m) => m.role === 'user').slice(-3).map((m) => m.content).join('\n');
   let knowledge = [];
   try {
@@ -71,19 +73,19 @@ export async function answer(messages) {
   }
   const language = detectLanguage(messages);
   const prompt = [
-    { role: 'system', content: buildSystemPrompt(knowledge, language) },
+    { role: 'system', content: buildSystemPrompt(knowledge, language, conv) },
     ...messages,
     // A last reminder right before the answer is what keeps small models in the right language.
     { role: 'system', content: `Answer the customer now, in ${language} only.` },
   ];
-  let { reply, tagged } = takeHandoffTag(await chat(prompt));
+  let { reply, tag } = takeTags(await chat(prompt));
   if (reply && wrongLanguage(reply, language)) {
     console.warn(`[agent] Reply was not in ${language}, asking again`);
-    reply = takeHandoffTag(await chat(
+    reply = takeTags(await chat(
       [...prompt, { role: 'assistant', content: reply }, { role: 'user', content: `Please write that again in ${language} only.` }],
       { temperature: 0 },
     )).reply;
     if (wrongLanguage(reply, language)) reply = '';
   }
-  return { reply: reply || getSetting('fallback_message'), sources: knowledge, language, handoff: tagged };
+  return { reply: reply || getSetting('fallback_message'), sources: knowledge, language, tag };
 }
