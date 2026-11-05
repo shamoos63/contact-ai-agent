@@ -31,7 +31,7 @@ export default function Handoff() {
     <form className="page" onSubmit={save}>
       <PageHeader
         title="Team handoff"
-        subtitle="Requests the AI passes to a person. For each topic, the AI first asks the customer for the details you list, then sends the customer's name, number and a short summary to that topic's team on WhatsApp. The customer is never given your team's own number."
+        subtitle="Requests a specialist should handle. When a customer needs one, the AI asks them one direct question about it. Whatever they answer, they are told a specialist will contact them soon, and their name, number and a short summary go to that topic's team on WhatsApp. The customer is never given your team's own number."
       />
 
       <div className="card stack">
@@ -49,6 +49,14 @@ export default function Handoff() {
           </label>
           <label>Don't send the same customer for the same topic again for (hours)<input type="number" min="1" value={h.cooldown_hours} onChange={(e) => setH({ ...h, cooldown_hours: e.target.value })} /></label>
         </div>
+        <label>
+          After the customer answers, tell them (English)
+          <input value={h.confirm_message_en || ''} onChange={(e) => setH({ ...h, confirm_message_en: e.target.value })} />
+        </label>
+        <label>
+          After the customer answers, tell them (Arabic)
+          <input dir="rtl" value={h.confirm_message_ar || ''} onChange={(e) => setH({ ...h, confirm_message_ar: e.target.value })} />
+        </label>
         <small className="muted">Requests are sent from your connected WhatsApp number, so WhatsApp must be connected under Channels. Messages from team numbers are never answered by the AI. A topic with nobody in it is skipped.</small>
       </div>
 
@@ -66,7 +74,7 @@ export default function Handoff() {
             <input dir="auto" value={c.when} placeholder="needs a repair, maintenance or a technician visit" onChange={(e) => setCat(i, { when: e.target.value })} />
           </label>
           <label>
-            First ask them for
+            The AI's one question should be about
             <input dir="auto" value={c.ask} placeholder="which device, what the problem is, their location" onChange={(e) => setCat(i, { ask: e.target.value })} />
           </label>
           <label>

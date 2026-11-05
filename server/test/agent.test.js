@@ -234,8 +234,8 @@ test('handoff: asks what the customer needs, then sends number and brief to the 
   assert.equal(handoff.isTeamNumber('971551234567'), true);
   assert.equal(handoff.isTeamNumber('971569998888'), true);
   const prompt = mods.agent.buildSystemPrompt([]);
-  assert.match(prompt, /- sales \(Sales\): the customer wants to buy \| product, quantity, city/);
-  assert.match(prompt, /- maintenance \(Maintenance request\): something needs a repair/);
+  assert.match(prompt, /- \[ASK:sales\] Sales: the customer wants to buy \| product, quantity, city/);
+  assert.match(prompt, /- \[ASK:maintenance\] Maintenance request: something needs a repair/);
   assert.doesNotMatch(prompt, /551234567/);
 
   const msg = { channel: 'whatsapp', externalId: '971501112222@s.whatsapp.net', name: 'Huda', handle: '+971501112222', convMeta: { phone: '+971501112222' } };
@@ -250,7 +250,7 @@ test('handoff: asks what the customer needs, then sends number and brief to the 
   // 2. Customer answers: the AI thanks them and the request goes to the sales team only.
   mods.inbox.handleIncoming({ ...msg, text: '3 iPhone 16 Pro, delivery to Dubai', messageId: 's2' });
   await new Promise((r) => setTimeout(r, 400));
-  assert.equal(sent[1], 'Thank you! Our team will contact you shortly.');
+  assert.equal(sent[1], 'Thank you! A specialist from our team will contact you soon.');
   assert.ok(!sent.some((t) => t.includes('551234567')), 'the customer never gets the team number');
   assert.equal(leads.length, 1);
   assert.equal(leads[0].phone, '+971 55 123 4567');
@@ -327,6 +327,62 @@ test('handoff: Arabic buying messages match the topic keywords and are handed of
   assert.equal(leads.length, 1);
   assert.equal(leads[0].phone, '+971 55 123 4567');
   assert.match(leads[0].text, /wa\.me\/971507778888/);
+});
+
+test('handoff: a maintenance request on Telegram goes to the maintenance team, after one question', async () => {
+  const handoff = await import('../src/handoff.js');
+  mods.settings.setSetting('handoff', TEAM([]));
+  const leads = [];
+  handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
+  const sent = [];
+  mods.inbox.registerSender('telegram', async (conv, text) => sent.push(text));
+  const msg = { channel: 'telegram', externalId: '5551', name: 'Lina', handle: '@lina' };
+  // The model writes the topic's name in the tag, not its id: it must still reach maintenance, not sales.
+  mods.inbox.handleIncoming({ ...msg, text: 'My laptop is broken, I need a repair', messageId: 'm1' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /Which device is it/);
+  assert.doesNotMatch(sent[0], /\[/, 'the tag is not shown to the customer');
+  let conv = mods.inbox.listConversations({ channel: 'telegram' }).find((c) => c.external_id === '5551');
+  assert.equal(conv.meta.handoffStage.topic, 'maintenance');
+
+  // Whatever they answer, they get the fixed message right away and the details go to maintenance.
+  mods.inbox.handleIncoming({ ...msg, text: 'HP Pavilion, screen stays black, Ajman', messageId: 'm2' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(sent[1], 'Thank you! A specialist from our team will contact you soon.');
+  assert.equal(leads.length, 1);
+  assert.equal(leads[0].phone, '+971 56 999 8888');
+  assert.match(leads[0].text, /New request: Maintenance request/);
+  assert.match(leads[0].text, /t\.me\/lina/);
+  conv = mods.inbox.listConversations({ channel: 'telegram' }).find((c) => c.external_id === '5551');
+  assert.equal(conv.meta.handoffStage, null);
+
+  // Arabic customers get the Arabic message.
+  const sentAr = [];
+  mods.inbox.registerSender('telegram', async (conv, text) => sentAr.push(text));
+  mods.inbox.updateMeta(conv.id, { handoffStage: { topic: 'sales', at: Date.now() } });
+  mods.inbox.handleIncoming({ ...msg, text: 'ايفون ١٥ للشارقة', messageId: 'm3' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.match(sentAr[0], /سيتواصل معك أحد المختصين/);
+});
+
+test('handoff: tags with an unknown topic are resolved from the chat, never sent to the wrong team', async () => {
+  const handoff = await import('../src/handoff.js');
+  mods.settings.setSetting('handoff', TEAM([]));
+  assert.equal(handoff.findCategory('Maintenance request')?.id, 'maintenance');
+  assert.equal(handoff.findCategory('maintenance_request')?.id, 'maintenance');
+  assert.equal(handoff.findCategory('SALES')?.id, 'sales');
+  assert.equal(handoff.takeTags('Which printer? [ASK: Maintenance request]').tag.topic, 'maintenance request');
+  // Keywords of two topics: the one with more matches wins.
+  assert.equal(handoff.matchTopics('بدي صيانة لجهاز خربان بس بدي اعرف السعر')[0].id, 'maintenance');
+
+  const leads = [];
+  handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
+  mods.inbox.registerSender('telegram', async () => {});
+  const conv = mods.inbox.handleIncoming({ channel: 'telegram', externalId: '5552', name: 'Omar', handle: '@omar', text: 'My printer stopped working', messageId: 'u1', autoReply: false });
+  await handoff.afterReply(conv, { type: 'ask', topic: 'repairs' });
+  let c = mods.inbox.getConversation(conv);
+  assert.equal(c.meta.handoffStage.topic, 'maintenance', 'an unknown tag falls back to asking the model which team');
 });
 
 test('handoff: topics get ids, and the old sales setting carries over', async () => {

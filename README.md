@@ -117,17 +117,17 @@ Voice notes on WhatsApp and Telegram are turned into text on your own computer w
 Under **Team handoff**, add a topic for each kind of request a person should take over, for example *Sales*, *Maintenance request* or *Software inquiry* (these three are there to start with). For each topic set:
 
 - **Hand off when the customer…**: e.g. "needs a repair, maintenance or a technician visit".
-- **First ask them for**: the details the team needs, e.g. "which device, what the problem is, their location".
+- **The AI's one question should be about**: the details the team needs, e.g. "which device, what the problem is, their location".
 - **Send to**: one or more people (name, WhatsApp number with country code, optional email).
 - **Keywords** (optional): words that always mean this topic, in Arabic or English, e.g. `اشتري, شراء, سعر, بدي جهاز, buy, price`. When a customer's message contains one, the AI is told to follow the handoff steps, so it can't just answer from the knowledge instead. Spelling variants like أ/ا and ة/ه are matched too. The three starting topics come with keywords.
 
 The conversation then goes like this:
 
-1. The customer's message matches a topic. The AI asks for the details you listed.
-2. The customer answers. The AI thanks them and says the team will contact them shortly.
-3. That topic's team gets a WhatsApp message with the topic, the customer's name, a tap-to-chat `wa.me` link and a short summary of what they need.
+1. The customer's message needs a topic (the AI decides from "Hand off when…", and keywords make sure). The AI doesn't answer it itself: it asks **one** direct question about the request.
+2. Whatever the customer answers, they immediately get a fixed message ("Thank you! A specialist from our team will contact you soon.", editable in English and Arabic).
+3. That topic's team gets a WhatsApp message with the topic, the customer's name, a tap-to-chat link (`wa.me` or `t.me`) and a short summary of what they need.
 
-If the customer gives the details straight away, step 1 is skipped. One chat can go to several teams (a customer buying a phone and asking for a repair reaches both). The customer is never given a team's own number: while handoff is on, redirect rules about a topic or pointing at a team number are not used. The same customer isn't sent twice for the same topic within 24 hours (adjustable). The **Send to team…** menu in the inbox does it by hand for any chat. Requests are sent from your connected WhatsApp number, and the AI never answers messages coming from team numbers. If you used the older Settings → Sales handoff, your sales people are carried over to the Sales topic.
+One chat can go to several teams (a customer buying a phone and asking for a repair reaches both). The customer is never given a team's own number: while handoff is on, redirect rules about a topic or pointing at a team number are not used. The same customer isn't sent twice for the same topic within 24 hours (adjustable). The **Send to team…** menu in the inbox does it by hand for any chat. Requests are sent from your connected WhatsApp number, and the AI never answers messages coming from team numbers. If you used the older Settings → Sales handoff, your sales people are carried over to the Sales topic.
 
 ### Email forwarding rules
 Under **Email forwarding** you decide which emails go to which people, for example invoices to accounting and CVs to HR. A rule matches either by **keywords** (instant, e.g. `invoice, payment, فاتورة`) or by a description the **AI** understands (e.g. "job applications and CVs"). Matching emails are forwarded with their attachments from the same mailbox, with Reply-To set to the customer so your colleague can answer them directly. Per rule you choose whether the AI still replies to the customer or leaves it to the team. Each forward shows as a note in the conversation, and **Try a sample email** shows which rules would fire.

@@ -24,6 +24,9 @@ export const DEFAULTS = {
     enabled: false,
     brief_language: 'English',
     cooldown_hours: 24,
+    // Sent to the customer after they answer the AI's question; the details then go to the team.
+    confirm_message_en: 'Thank you! A specialist from our team will contact you soon.',
+    confirm_message_ar: 'شكراً لك! سيتواصل معك أحد المختصين من فريقنا قريباً.',
     categories: [
       {
         id: 'sales',
@@ -31,7 +34,7 @@ export const DEFAULTS = {
         enabled: true,
         when: 'the customer wants to buy, asks for prices or a quote, or asks for more sales details',
         ask: 'which product or service, how many, budget, delivery city',
-        keywords: 'buy, purchase, price, quote, how much, اشتري, أشتري, شراء, سعر, اسعار, أسعار, بكم, عرض سعر, بدي جهاز',
+        keywords: 'buy, purchase, price, quote, how much, اشتري, أشتري, شراء, سعر, اسعار, أسعار, بكم, عرض سعر, مستعمل',
         team: [],
       },
       {
@@ -82,9 +85,12 @@ export function getSetting(key) {
 }
 
 // Topics saved before keywords existed get the built-in keywords for their id.
+// The first Sales keywords had "بدي جهاز" ("I want a device"), which also matched repair requests.
+const OLD_SALES_KEYWORDS = 'buy, purchase, price, quote, how much, اشتري, أشتري, شراء, سعر, اسعار, أسعار, بكم, عرض سعر, بدي جهاز';
 function withDefaultKeywords(h) {
+  const builtIn = (id) => DEFAULTS.handoff.categories.find((d) => d.id === id)?.keywords || '';
   const categories = (h.categories || []).map((c) =>
-    c.keywords === undefined ? { ...c, keywords: DEFAULTS.handoff.categories.find((d) => d.id === c.id)?.keywords || '' } : c);
+    c.keywords === undefined || (c.id === 'sales' && c.keywords === OLD_SALES_KEYWORDS) ? { ...c, keywords: builtIn(c.id) } : c);
   return { ...h, categories };
 }
 
