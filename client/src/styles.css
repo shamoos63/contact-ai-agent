@@ -261,3 +261,7 @@ ol { margin: 6px 0 10px; padding-inline-start: 22px; line-height: 1.7; }
 .voice-text svg { flex-shrink: 0; margin-top: 3px; color: var(--muted); }
 .team-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; align-items: end; }
 @media (max-width: 700px) { .team-row { grid-template-columns: 1fr; } }
+
+.send-to { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 0 0 0 10px; background: var(--panel); }
+.send-to select { border: 0; background: transparent; padding: 7px 8px 7px 0; min-width: 0; }
+.topic-name { font-size: 16px; font-weight: 600; flex: 1; min-width: 0; }

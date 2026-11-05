@@ -11,7 +11,7 @@ Everything runs on your own computer with free, local AI ([Ollama](https://ollam
 | **Shared inbox** | All conversations from every channel in one place, live. Read, reply yourself, or let the AI answer. Turn the AI off per chat to take over. |
 | **Knowledge base** | Upload PDF / Word / text files, add web pages, or type notes. The AI answers only from this. A "Try it" box lets you test answers. |
 | **Redirects** | Rules like "when the customer wants to buy → send +971…" or "→ send https://…". |
-| **Sales handoff** | Sends a buying customer's number and a short brief to your sales team on WhatsApp. |
+| **Team handoff** | Topics you define (sales, maintenance, software…): the AI asks for the details, then sends the customer's number and a short brief to that topic's team on WhatsApp. |
 | **Voice notes** | WhatsApp/Telegram voice notes are transcribed locally (Whisper) so the AI can answer them. |
 | **Email forwarding** | Forward matching emails (by keywords or by AI) to team members, with attachments. |
 | **Channels** | WhatsApp (QR scan, like WhatsApp Web), Telegram bot, any number of email accounts (Gmail or your domain, IMAP/SMTP), Facebook + Instagram (official Meta API). |
@@ -106,14 +106,20 @@ Click **Test connection**, then **Save**. Only emails that arrive after the acco
 ### Voice notes
 Voice notes on WhatsApp and Telegram are turned into text on your own computer with OpenAI's free **Whisper** model, so the AI answers them like typed messages. The recording can still be played in the inbox. Pick the model under **AI engine → Voice notes**: *Small* (≈ 600 MB, recommended), *Base* (faster, weaker Arabic) or *Large v3 turbo* (best Arabic, needs a strong machine). It downloads once from huggingface.co into `data/speech-models`. If most customers speak Arabic, set the language to "Always Arabic".
 
-### Sales handoff
-Under **Settings → Sales handoff**, add your sales people (name, WhatsApp number with country code, optional email) and describe when to hand off (default: the customer wants to buy, asks for prices or a quote, or more sales details). The conversation then goes like this:
+### Team handoff
+Under **Team handoff**, add a topic for each kind of request a person should take over, for example *Sales*, *Maintenance request* or *Software inquiry* (these three are there to start with). For each topic set:
 
-1. The customer asks to buy. The AI asks what exactly they need (product, quantity, budget, delivery city).
-2. The customer answers. The AI thanks them and says the sales manager will contact them shortly.
-3. The sales team gets a WhatsApp message with the customer's name, a tap-to-chat `wa.me` link and a short summary of what they need.
+- **Hand off when the customer…**: e.g. "needs a repair, maintenance or a technician visit".
+- **First ask them for**: the details the team needs, e.g. "which device, what the problem is, their location".
+- **Send to**: one or more people (name, WhatsApp number with country code, optional email).
 
-If the customer gives the details straight away, step 1 is skipped. The customer is never given the sales team's own number: while sales handoff is on, redirect rules about sales or pointing at a team number are not used. The same customer isn't sent twice within 24 hours (adjustable). The **Send to sales** button in the inbox does it by hand for any chat. Leads are sent from your connected WhatsApp number, and the AI never answers messages coming from team numbers.
+The conversation then goes like this:
+
+1. The customer's message matches a topic. The AI asks for the details you listed.
+2. The customer answers. The AI thanks them and says the team will contact them shortly.
+3. That topic's team gets a WhatsApp message with the topic, the customer's name, a tap-to-chat `wa.me` link and a short summary of what they need.
+
+If the customer gives the details straight away, step 1 is skipped. One chat can go to several teams (a customer buying a phone and asking for a repair reaches both). The customer is never given a team's own number: while handoff is on, redirect rules about a topic or pointing at a team number are not used. The same customer isn't sent twice for the same topic within 24 hours (adjustable). The **Send to team…** menu in the inbox does it by hand for any chat. Requests are sent from your connected WhatsApp number, and the AI never answers messages coming from team numbers. If you used the older Settings → Sales handoff, your sales people are carried over to the Sales topic.
 
 ### Email forwarding rules
 Under **Email forwarding** you decide which emails go to which people, for example invoices to accounting and CVs to HR. A rule matches either by **keywords** (instant, e.g. `invoice, payment, فاتورة`) or by a description the **AI** understands (e.g. "job applications and CVs"). Matching emails are forwarded with their attachments from the same mailbox, with Reply-To set to the customer so your colleague can answer them directly. Per rule you choose whether the AI still replies to the customer or leaves it to the team. Each forward shows as a note in the conversation, and **Try a sample email** shows which rules would fire.

@@ -19,12 +19,37 @@ const DEFAULTS = {
   telegram: { enabled: false, token: '' },
   whatsapp: { enabled: false },
   voice: { enabled: true, model: 'onnx-community/whisper-small', language: 'auto' },
-  sales_handoff: {
+  // Team handoff: requests the AI passes to a person, grouped by topic (sales, maintenance, ...).
+  handoff: {
     enabled: false,
-    when: 'the customer wants to buy, asks for prices or a quote, or asks for more sales details',
-    team: [],
     brief_language: 'English',
     cooldown_hours: 24,
+    categories: [
+      {
+        id: 'sales',
+        name: 'Sales',
+        enabled: true,
+        when: 'the customer wants to buy, asks for prices or a quote, or asks for more sales details',
+        ask: 'which product or service, how many, budget, delivery city',
+        team: [],
+      },
+      {
+        id: 'maintenance',
+        name: 'Maintenance request',
+        enabled: true,
+        when: 'the customer needs a repair, maintenance or a technician visit',
+        ask: 'which device or product, what the problem is, their location',
+        team: [],
+      },
+      {
+        id: 'software',
+        name: 'Software inquiry',
+        enabled: true,
+        when: 'the customer asks about software, licences, installation or a custom software project',
+        ask: 'which software or what they want built, how many users, their deadline',
+        team: [],
+      },
+    ],
   },
   meta: {
     enabled: false,
@@ -44,11 +69,27 @@ const setStmt = db.prepare(
 
 export function getSetting(key) {
   const row = getStmt.get(key);
+  if (!row && key === 'handoff') return legacyHandoff() || DEFAULTS.handoff;
   const def = DEFAULTS[key];
   if (!row) return def;
   const value = JSON.parse(row.value);
   if (def && typeof def === 'object' && !Array.isArray(def)) return { ...def, ...value };
   return value;
+}
+
+// Before topics existed there was one "sales_handoff" setting: carry it over as the Sales topic.
+function legacyHandoff() {
+  const row = getStmt.get('sales_handoff');
+  if (!row) return null;
+  const old = JSON.parse(row.value);
+  const def = DEFAULTS.handoff;
+  return {
+    ...def,
+    enabled: !!old.enabled,
+    brief_language: old.brief_language || def.brief_language,
+    cooldown_hours: old.cooldown_hours || def.cooldown_hours,
+    categories: def.categories.map((c) => (c.id === 'sales' ? { ...c, when: old.when || c.when, team: old.team || [] } : c)),
+  };
 }
 
 export function setSetting(key, value) {

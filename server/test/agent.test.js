@@ -211,9 +211,20 @@ test('voice note that cannot be read is kept with a note and no AI reply', async
   assert.equal(msgs.length, 2);
 });
 
-test('sales handoff: asks what the customer needs, then sends number and brief to the team, once', async () => {
+const TEAM = (cats) => ({
+  enabled: true,
+  brief_language: 'English',
+  cooldown_hours: 24,
+  categories: [
+    { id: 'sales', name: 'Sales', when: 'the customer wants to buy', ask: 'product, quantity, city', team: [{ name: 'Rami', phone: '+971 55 123 4567' }] },
+    { id: 'maintenance', name: 'Maintenance request', when: 'something needs a repair', ask: 'device, problem, location', team: [{ name: 'Omar', phone: '+971 56 999 8888' }] },
+    ...cats,
+  ],
+});
+
+test('handoff: asks what the customer needs, then sends number and brief to the sales team, once', async () => {
   const handoff = await import('../src/handoff.js');
-  mods.settings.setSetting('sales_handoff', { enabled: true, when: 'the customer wants to buy', team: [{ name: 'Rami', phone: '+971 55 123 4567' }], brief_language: 'English', cooldown_hours: 24 });
+  mods.settings.setSetting('handoff', TEAM([]));
   // A redirect that would hand the customer the sales number must not reach the prompt.
   mods.db.prepare('INSERT INTO redirects (name, when_text, value) VALUES (?, ?, ?)').run('Sales team', 'they want to buy', '+971551234567');
   const leads = [];
@@ -221,47 +232,63 @@ test('sales handoff: asks what the customer needs, then sends number and brief t
   const sent = [];
   mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
   assert.equal(handoff.isTeamNumber('971551234567'), true);
+  assert.equal(handoff.isTeamNumber('971569998888'), true);
   const prompt = mods.agent.buildSystemPrompt([]);
-  assert.match(prompt, /\[SALES\]/);
+  assert.match(prompt, /- sales: the customer wants to buy \| product, quantity, city/);
+  assert.match(prompt, /- maintenance: something needs a repair/);
   assert.doesNotMatch(prompt, /551234567/);
 
   const msg = { channel: 'whatsapp', externalId: '971501112222@s.whatsapp.net', name: 'Huda', handle: '+971501112222', convMeta: { phone: '+971501112222' } };
-  // 1. Customer asks to buy without details: the AI asks what they need, nothing goes to sales yet.
+  // 1. Customer asks to buy without details: the AI asks what they need, nothing goes to the team yet.
   mods.inbox.handleIncoming({ ...msg, text: 'Hi, I want to buy phones', messageId: 's1' });
   await new Promise((r) => setTimeout(r, 400));
   assert.deepEqual(sent, ['Happy to help! Which product do you need, how many, and to which city?']);
   assert.equal(leads.length, 0);
   let conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
-  assert.equal(conv.meta.salesStage, 'asking');
+  assert.equal(conv.meta.handoffStage.topic, 'sales');
 
-  // 2. Customer answers: the AI thanks them and the lead goes to the sales manager.
+  // 2. Customer answers: the AI thanks them and the request goes to the sales team only.
   mods.inbox.handleIncoming({ ...msg, text: '3 iPhone 16 Pro, delivery to Dubai', messageId: 's2' });
   await new Promise((r) => setTimeout(r, 400));
-  assert.equal(sent[1], 'Thank you! Our sales manager will contact you shortly on this number.');
-  assert.ok(!sent.some((t) => t.includes('551234567')), 'the customer never gets the sales number');
+  assert.equal(sent[1], 'Thank you! Our team will contact you shortly.');
+  assert.ok(!sent.some((t) => t.includes('551234567')), 'the customer never gets the team number');
   assert.equal(leads.length, 1);
   assert.equal(leads[0].phone, '+971 55 123 4567');
-  assert.match(leads[0].text, /New sales lead/);
+  assert.match(leads[0].text, /New request: Sales/);
   assert.match(leads[0].text, /Huda/);
   assert.match(leads[0].text, /https:\/\/wa\.me\/971501112222/);
   assert.match(leads[0].text, /Wants 3 iPhone 16 phones/);
   assert.match(leads[0].text, /3 iPhone 16 Pro, delivery to Dubai/);
   conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
-  assert.equal(conv.meta.salesLead, true);
-  assert.equal(conv.meta.salesStage, null);
-  assert.ok(mods.inbox.listMessages(conv.id).some((m) => m.direction === 'note' && /Sent to sales: Rami/.test(m.text)));
+  assert.deepEqual(conv.meta.leads, ['Sales']);
+  assert.equal(conv.meta.handoffStage, null);
+  assert.ok(mods.inbox.listMessages(conv.id).some((m) => m.direction === 'note' && /Sent to Sales team: Rami/.test(m.text)));
 
   // 3. Asking again within the cooldown doesn't send a second lead.
   mods.inbox.handleIncoming({ ...msg, text: 'I want to buy a case too', messageId: 's3' });
   await new Promise((r) => setTimeout(r, 400));
   assert.equal(leads.length, 1);
 
-  // 4. The manual button always sends.
-  await handoff.handOff(conv.id, { reason: 'manual' });
+  // 4. A different topic in the same chat still goes to its own team.
+  mods.inbox.handleIncoming({ ...msg, text: 'Also my laptop screen is broken, can you repair it?', messageId: 's4' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.match(sent.at(-1), /Which device is it/);
+  mods.inbox.handleIncoming({ ...msg, text: 'Dell XPS, cracked screen, Sharjah', messageId: 's5' });
+  await new Promise((r) => setTimeout(r, 400));
   assert.equal(leads.length, 2);
+  assert.equal(leads[1].phone, '+971 56 999 8888');
+  assert.match(leads[1].text, /New request: Maintenance request/);
+  assert.match(leads[1].text, /Laptop screen is broken/);
+  conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
+  assert.deepEqual(conv.meta.leads, ['Sales', 'Maintenance request']);
+
+  // 5. The manual button always sends, to the topic picked.
+  await handoff.handOff(conv.id, { category: 'sales', reason: 'manual' });
+  assert.equal(leads.length, 3);
+  assert.equal(leads[2].phone, '+971 55 123 4567');
 });
 
-test('sales handoff: a customer who gives details straight away is handed off at once', async () => {
+test('handoff: a customer who gives details straight away is handed off at once', async () => {
   const handoff = await import('../src/handoff.js');
   const leads = [];
   handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
@@ -269,9 +296,30 @@ test('sales handoff: a customer who gives details straight away is handed off at
   mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
   mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971503334444@s.whatsapp.net', name: 'Sami', handle: '+971503334444', convMeta: { phone: '+971503334444' }, text: 'I want to buy 3 iPhones for Abu Dhabi', messageId: 'd1' });
   await new Promise((r) => setTimeout(r, 400));
-  assert.match(sent[0], /sales manager will contact you/);
+  assert.match(sent[0], /team will contact you/);
   assert.equal(leads.length, 1);
   assert.match(leads[0].text, /wa\.me\/971503334444/);
-  mods.settings.setSetting('sales_handoff', { enabled: false, team: [] });
   mods.db.prepare("DELETE FROM redirects WHERE name = 'Sales team'").run();
+});
+
+test('handoff: topics get ids, and the old sales setting carries over', async () => {
+  const handoff = await import('../src/handoff.js');
+  const n = handoff.normalizeHandoff({ enabled: true, categories: [
+    { name: 'Software inquiries', when: 'software', team: [{ name: 'A', phone: '1' }, { name: '', phone: '' }] },
+    { name: 'طلب صيانة', when: 'repair', team: [] },
+    { name: 'Software inquiries', when: 'again' },
+    { name: '', when: '' },
+  ] });
+  assert.deepEqual(n.categories.map((c) => c.id), ['software-inquiries', 'topic2', 'software-inquiries-3']);
+  assert.equal(n.categories[0].team.length, 1);
+
+  mods.db.prepare("DELETE FROM settings WHERE key = 'handoff'").run();
+  mods.settings.setSetting('sales_handoff', { enabled: true, when: 'they want a quote', team: [{ name: 'Rami', phone: '+971 55 123 4567' }] });
+  const s = mods.settings.getSetting('handoff');
+  assert.equal(s.enabled, true);
+  const sales = s.categories.find((c) => c.id === 'sales');
+  assert.equal(sales.when, 'they want a quote');
+  assert.equal(sales.team[0].name, 'Rami');
+  assert.deepEqual(handoff.activeCategories().map((c) => c.id), ['sales']);
+  mods.settings.setSetting('handoff', { enabled: false, categories: [] });
 });

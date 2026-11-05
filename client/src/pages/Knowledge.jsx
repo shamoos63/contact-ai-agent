@@ -179,8 +179,8 @@ function TestBox() {
       {result?.reply && (
         <div className="test-result">
           <div className="bubble" dir="auto">{result.reply}</div>
-          {result.tag === 'sales' && <div className="small ok">✓ The AI is asking what the customer needs. Their answer will go to your sales team.</div>}
-          {result.tag === 'handoff' && <div className="small ok">✓ This would be sent to your sales team.</div>}
+          {result.handoff?.type === 'ask' && <div className="small ok">✓ {result.handoff.name}: the AI is asking for details. The customer's answer will go to that team.</div>}
+          {result.handoff?.type === 'handoff' && <div className="small ok">✓ {result.handoff.name}: this would be sent to that team.</div>}
           <div className="small muted">
             Used: {result.sources.length ? result.sources.map((s) => `${s.title} (${Math.round(s.score * 100)}%)`).join(', ') : 'no knowledge matched'}
           </div>
