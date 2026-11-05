@@ -10,7 +10,7 @@ import { answer } from '../ai/agent.js';
 import * as ollama from '../ai/ollama.js';
 import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
-import { handOff } from '../handoff.js';
+import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
@@ -63,7 +63,7 @@ api.post('/conversations/:id/ai-reply', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 api.post('/conversations/:id/handoff', wrap(async (req, res) => {
-  const results = await handOff(Number(req.params.id), { reason: 'manual' });
+  const results = await handOff(Number(req.params.id), { category: req.body?.category, reason: 'manual' });
   res.json(results.map((r) => ({ name: r.member.name, via: r.via, error: r.error || null })));
 }));
 api.get('/media/:file', (req, res) => {
@@ -163,7 +163,9 @@ api.post('/kb-reindex', (req, res) => {
 api.post('/kb-test', wrap(async (req, res) => {
   const question = String(req.body?.question || '').trim();
   if (!question) return res.status(400).json({ error: 'Question is required' });
-  res.json(await answer([{ role: 'user', content: question }]));
+  const result = await answer([{ role: 'user', content: question }]);
+  const topic = result.tag && (handoffSettings().categories || []).find((c) => c.id === result.tag.topic);
+  res.json({ ...result, handoff: result.tag ? { type: result.tag.type, name: topic?.name || result.tag.topic || 'team' } : null });
 }));
 api.post('/kb-search', wrap(async (req, res) => res.json(await search(String(req.body?.query || ''), { k: 8, minScore: 0 }))));
 
@@ -204,6 +206,7 @@ api.put('/settings', wrap(async (req, res) => {
   for (const key of SETTING_KEYS) {
     if (!(key in body)) continue;
     let value = body[key];
+    if (key === 'handoff') value = normalizeHandoff(value);
     if (SECRET_FIELDS[key]) {
       value = { ...before[key], ...value };
       for (const f of SECRET_FIELDS[key]) if (value[f] === MASK) value[f] = before[key][f];

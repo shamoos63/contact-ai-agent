@@ -79,7 +79,6 @@ export default function Settings() {
           <span className="ok">{saved}</span>
         </div>
       </form>
-      <SalesHandoff />
       <Password />
     </div>
   );
@@ -94,68 +93,6 @@ function ModelState({ ai, model, ready }) {
     <small className="warn">
       Not installed. <button type="button" className="link" onClick={() => api('/ai/pull', { method: 'POST', body: { model } })}>Download now</button>
     </small>
-  );
-}
-
-function SalesHandoff() {
-  const [h, setH] = useState(null);
-  const [msg, setMsg] = useState('');
-  useEffect(() => {
-    api('/settings').then((s) => setH(s.sales_handoff));
-  }, []);
-  if (!h) return null;
-  const team = h.team?.length ? h.team : [{ name: '', phone: '', email: '' }];
-  const setMember = (i, k, v) => setH({ ...h, team: team.map((m, j) => (j === i ? { ...m, [k]: v } : m)) });
-  const save = async (e) => {
-    e.preventDefault();
-    const clean = { ...h, team: team.filter((m) => m.name || m.phone || m.email), cooldown_hours: Number(h.cooldown_hours) || 24 };
-    if (clean.enabled && !clean.team.length) return setMsg('⚠ Add at least one team member');
-    setH((await api('/settings', { method: 'PUT', body: { sales_handoff: clean } })).sales_handoff);
-    setMsg('✓ Saved');
-    setTimeout(() => setMsg(''), 2000);
-  };
-  return (
-    <form className="card stack" onSubmit={save}>
-      <div className="card-head">
-        <h3>Sales handoff</h3>
-        <label className="switch"><input type="checkbox" checked={!!h.enabled} onChange={(e) => setH({ ...h, enabled: e.target.checked })} /><span>On</span></label>
-      </div>
-      <p className="muted small">
-        When a customer wants to buy, the AI first asks what they need (product, quantity, budget, city). When they answer, it tells
-        them the sales manager will contact them, and sends the customer's name, number and a short summary of what they need to these
-        people on WhatsApp (and email if you add one). The customer is never given the sales team's own number. You can also send any
-        chat by hand with "Send to sales" in the inbox.
-      </p>
-      <label>
-        Hand off when the customer…
-        <input dir="auto" value={h.when} onChange={(e) => setH({ ...h, when: e.target.value })} />
-      </label>
-      <div className="stack">
-        <span className="label">Sales team</span>
-        {team.map((m, i) => (
-          <div key={i} className="team-row">
-            <label>Name<input dir="auto" value={m.name} onChange={(e) => setMember(i, 'name', e.target.value)} placeholder="Rami" /></label>
-            <label>WhatsApp number<input value={m.phone} onChange={(e) => setMember(i, 'phone', e.target.value)} placeholder="+971 55 123 4567" /></label>
-            <label>Email (optional)<input value={m.email || ''} onChange={(e) => setMember(i, 'email', e.target.value)} placeholder="rami@company.com" /></label>
-            <button type="button" className="danger" onClick={() => setH({ ...h, team: team.filter((_, j) => j !== i) })}>Remove</button>
-          </div>
-        ))}
-        <div><button type="button" onClick={() => setH({ ...h, team: [...team, { name: '', phone: '', email: '' }] })}>+ Add person</button></div>
-        <small className="muted">Include the country code. The lead is sent from your connected WhatsApp number, so WhatsApp must be connected under Channels. Messages from these numbers are never answered by the AI.</small>
-      </div>
-      <div className="grid2">
-        <label>
-          Write the summary in
-          <select value={h.brief_language} onChange={(e) => setH({ ...h, brief_language: e.target.value })}>
-            <option>English</option>
-            <option>Arabic</option>
-          </select>
-        </label>
-        <label>Don't send the same customer again for (hours)<input type="number" min="1" value={h.cooldown_hours} onChange={(e) => setH({ ...h, cooldown_hours: e.target.value })} /></label>
-      </div>
-      {msg && <div className={msg.startsWith('✓') ? 'ok' : 'error'}>{msg}</div>}
-      <div><button className="primary">Save sales handoff</button></div>
-    </form>
   );
 }
 

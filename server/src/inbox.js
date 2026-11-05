@@ -103,7 +103,7 @@ async function autoReply(conversationId, { force = false } = {}) {
     // A human may have taken over while the model was thinking.
     if (!force && !conversationRow(conversationId).auto_reply) return;
     await sendMessage(conversationId, reply, { sender: 'ai', meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })) } });
-    afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Sales handoff failed: ${err.message}`));
+    afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
   } finally {
     emit('typing', { conversationId, typing: false });
   }

@@ -43,17 +43,26 @@ export function startMockOllama() {
       }
       const knows = system.includes('9am to 6pm');
       const lastUser = [...data.messages].reverse().find((m) => m.role === 'user')?.content || '';
-      if (lastUser.includes('Write a brief for our sales team')) {
+      if (lastUser.includes('Write a brief for our Sales team')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Wants 3 iPhone 16 phones, delivery to Dubai this week.' } }));
       }
-      if (system.includes('SALES REQUEST IN PROGRESS')) {
-        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Thank you! Our sales manager will contact you shortly on this number. [HANDOFF]' } }));
+      if (lastUser.includes('Write a brief for our Maintenance request team')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Laptop screen is broken, customer is in Sharjah.' } }));
       }
-      if (system.includes('SALES REQUESTS:') && /want to buy/i.test(lastUser)) {
+      const inProgress = system.match(/REQUEST IN PROGRESS \(.*?\)[\s\S]*?\[HANDOFF:([\w-]+)\]/);
+      if (inProgress) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: `Thank you! Our team will contact you shortly. [HANDOFF:${inProgress[1]}]` } }));
+      }
+      if (system.includes('TEAM HANDOFF:')) {
         const detailed = /\d/.test(lastUser);
-        return res.end(JSON.stringify({ message: { role: 'assistant', content: detailed
-          ? 'Great, 3 iPhones noted. Our sales manager will contact you shortly on this number. [HANDOFF]'
-          : 'Happy to help! Which product do you need, how many, and to which city? [SALES]' } }));
+        if (/want to buy/i.test(lastUser) && system.includes('- sales:')) {
+          return res.end(JSON.stringify({ message: { role: 'assistant', content: detailed
+            ? 'Great, 3 iPhones noted. Our team will contact you shortly. [HANDOFF:sales]'
+            : 'Happy to help! Which product do you need, how many, and to which city? [ASK:sales]' } }));
+        }
+        if (/repair|broken/i.test(lastUser) && system.includes('- maintenance:')) {
+          return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Sorry to hear that! Which device is it, what is the problem, and where are you? [ASK:maintenance]' } }));
+        }
       }
       if (/what is toptech/i.test(lastUser)) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'TopTech是我们提供最新科技产品的商店。' } }));

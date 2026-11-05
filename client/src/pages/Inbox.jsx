@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Search, Send, Bot, UserRound, MessageSquare, Mic, BadgeDollarSign } from 'lucide-react';
+import { Search, Send, Bot, UserRound, MessageSquare, Mic, UsersRound } from 'lucide-react';
 import { api, getSocket, CHANNELS, timeAgo, formatTime } from '../api.js';
 import { Avatar, ChannelTag } from '../components/ui.jsx';
 
@@ -65,7 +65,7 @@ export default function Inbox() {
             <span className="conv-side">
               {c.unread > 0 && <span className="badge">{c.unread}</span>}
               {!c.auto_reply && <span className="tag-soft" title="AI is paused, a human is handling this chat">You</span>}
-              {c.meta?.salesLead && <span className="tag-lead" title="Sent to the sales team">Lead</span>}
+              {leadsOf(c).map((l) => <span key={l} className="tag-lead" title={`Sent to the ${l} team`} dir="auto">{l}</span>)}
             </span>
           </button>
         ))}
@@ -77,12 +77,19 @@ export default function Inbox() {
   );
 }
 
+// Topics this chat was handed off for (older chats only knew "sales").
+const leadsOf = (c) => c?.meta?.leads || (c?.meta?.salesLead ? ['Sales'] : []);
+
 function Conversation({ id }) {
   const [conv, setConv] = useState(null);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
   const [handingOff, setHandingOff] = useState(false);
+  const [topics, setTopics] = useState([]);
+  useEffect(() => {
+    api('/settings').then((s) => setTopics((s.handoff?.categories || []).filter((c) => c.enabled !== false && c.team?.length))).catch(() => {});
+  }, []);
   const [error, setError] = useState('');
   const bottom = useRef(null);
 
@@ -130,11 +137,12 @@ function Conversation({ id }) {
   };
   const toggleAi = () => api(`/conversations/${id}`, { method: 'PATCH', body: { auto_reply: !conv.auto_reply } });
   const aiReply = () => api(`/conversations/${id}/ai-reply`, { method: 'POST' }).catch((err) => setError(err.message));
-  const handoff = async () => {
+  const handoff = async (category) => {
+    if (!category) return;
     setError('');
     setHandingOff(true);
     try {
-      const results = await api(`/conversations/${id}/handoff`, { method: 'POST' });
+      const results = await api(`/conversations/${id}/handoff`, { method: 'POST', body: { category } });
       if (results.length && results.every((r) => r.error)) setError(results.map((r) => `${r.name}: ${r.error}`).join(' · '));
     } catch (err) {
       setError(err.message);
@@ -162,9 +170,15 @@ function Conversation({ id }) {
             <input type="checkbox" checked={!!conv.auto_reply} onChange={toggleAi} />
             <span>AI auto-reply</span>
           </label>
-          <button onClick={handoff} disabled={handingOff} title="Send this customer's contact and a short brief to the sales team">
-            <BadgeDollarSign size={15} /> {handingOff ? 'Sending…' : conv.meta?.salesLead ? 'Send to sales again' : 'Send to sales'}
-          </button>
+          {topics.length > 0 && (
+            <label className="send-to" title="Send this customer's contact and a short brief to a team">
+              <UsersRound size={15} />
+              <select value="" disabled={handingOff} onChange={(e) => handoff(e.target.value)}>
+                <option value="">{handingOff ? 'Sending…' : 'Send to team…'}</option>
+                {topics.map((t) => <option key={t.id} value={t.id}>{t.name}{leadsOf(conv).includes(t.name) ? ' (again)' : ''}</option>)}
+              </select>
+            </label>
+          )}
           <button onClick={toggleStatus}>{conv.status === 'open' ? 'Close' : 'Reopen'}</button>
         </div>
       </header>
