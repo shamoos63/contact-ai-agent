@@ -28,6 +28,39 @@ export function activeCategories() {
   return (s.categories || []).filter((c) => c.enabled !== false && c.id && cleanTeam(c.team).length);
 }
 
+// Arabic spelling varies a lot in chat (أ/إ/ا, ة/ه, ى/ي, diacritics), so compare a simplified form.
+function simplify(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[\u064B-\u0652\u0640]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ');
+}
+
+const keywordsOf = (c) => String(c.keywords || '').split(/[,،\n]/).map((k) => simplify(k).trim()).filter(Boolean);
+
+// The topic whose keywords appear in the customer's message, if it can still be handed off.
+export function matchTopic(text, conv) {
+  if (pendingTopic(conv)) return null;
+  const t = simplify(text);
+  if (!t) return null;
+  return activeCategories().find((c) => !recentlyHandedOff(conv, c.id) && keywordsOf(c).some((k) => t.includes(k))) || null;
+}
+
+// A short reminder at the very end of the prompt. Small models follow that much better than
+// instructions buried before the company knowledge.
+export function handoffReminder(conv, topic) {
+  if (!handoffEnabled()) return null;
+  const pending = findCategory(pendingTopic(conv));
+  if (pending) return `The customer is answering your questions about their ${pending.name} request: thank them, say our team will contact them shortly, and end with [HANDOFF:${pending.id}].`;
+  if (topic) {
+    return `The customer's latest message is a ${topic.name} request. Follow the TEAM HANDOFF steps: if they have not given ${topic.ask || 'the details'} yet, ask for them and end with [ASK:${topic.id}]; if they have, end with [HANDOFF:${topic.id}]. Do not just answer from the knowledge.`;
+  }
+  return 'If the customer\'s latest message matches a TEAM HANDOFF topic, follow those steps and end with the tag.';
+}
+
 export function findCategory(id, { active = true } = {}) {
   const list = active ? activeCategories() : handoffSettings().categories || [];
   return list.find((c) => c.id === id) || null;
@@ -61,6 +94,7 @@ export function normalizeHandoff(value) {
         enabled: c.enabled !== false,
         when: (c.when || '').trim(),
         ask: (c.ask || '').trim(),
+        keywords: String(c.keywords ?? '').trim(),
         team: cleanTeam(c.team).map((m) => ({ name: (m.name || '').trim(), phone: (m.phone || '').trim(), email: (m.email || '').trim() })),
       };
     });
@@ -132,12 +166,12 @@ export function handoffPrompt(conv) {
   const lines = [`TEAM HANDOFF: Some requests are passed to a person on our team. Follow these steps instead of any redirect rule. ${NO_CONTACT}`];
   if (open.length) {
     lines.push('Topics (id: when the customer... | details to ask for):');
-    for (const c of open) lines.push(`- ${c.id}: ${c.when || c.name} | ${c.ask || 'what exactly they need'}`);
+    for (const c of open) lines.push(`- ${c.id} (${c.name}): ${c.when || c.name} | ${c.ask || 'what exactly they need'}`);
     lines.push(
       'When the customer\'s message matches one of these topics:',
       '1. If they have not yet given the details to ask for, ask for them in one short friendly message and end that reply with the tag [ASK:id], using the topic id.',
       '2. If they already gave the details, thank them, repeat in one line what they need, say our team will contact them shortly, and end the reply with the tag [HANDOFF:id].',
-      'Use a tag only when the message really matches a topic.',
+      'This applies in Arabic too (for example "بدي اشتري", "بدي جهاز", "عندي عطل"). Use a tag only when the message really matches a topic.',
     );
   }
   if (done.length) {

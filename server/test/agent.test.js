@@ -167,7 +167,7 @@ test('replies stay in the customer language and Chinese drift is retried', async
   assert.equal(language, 'English');
   assert.equal(reply, 'TopTech is our shop for the latest tech products.');
   const last = mock.calls.filter((c) => c.path === '/api/chat').at(-2);
-  assert.match(last.data.messages[0].content, /reply in English only/);
+  assert.match(last.data.messages[0].content, /Reply in the language of the customer's latest message/);
   assert.match(last.data.messages.at(-1).content, /in English only/);
 });
 
@@ -234,8 +234,8 @@ test('handoff: asks what the customer needs, then sends number and brief to the 
   assert.equal(handoff.isTeamNumber('971551234567'), true);
   assert.equal(handoff.isTeamNumber('971569998888'), true);
   const prompt = mods.agent.buildSystemPrompt([]);
-  assert.match(prompt, /- sales: the customer wants to buy \| product, quantity, city/);
-  assert.match(prompt, /- maintenance: something needs a repair/);
+  assert.match(prompt, /- sales \(Sales\): the customer wants to buy \| product, quantity, city/);
+  assert.match(prompt, /- maintenance \(Maintenance request\): something needs a repair/);
   assert.doesNotMatch(prompt, /551234567/);
 
   const msg = { channel: 'whatsapp', externalId: '971501112222@s.whatsapp.net', name: 'Huda', handle: '+971501112222', convMeta: { phone: '+971501112222' } };
@@ -300,6 +300,33 @@ test('handoff: a customer who gives details straight away is handed off at once'
   assert.equal(leads.length, 1);
   assert.match(leads[0].text, /wa\.me\/971503334444/);
   mods.db.prepare("DELETE FROM redirects WHERE name = 'Sales team'").run();
+});
+
+test('handoff: Arabic buying messages match the topic keywords and are handed off', async () => {
+  const handoff = await import('../src/handoff.js');
+  mods.settings.setSetting('handoff', TEAM([]));
+  const s = mods.settings.getSetting('handoff');
+  assert.match(s.categories[0].keywords, /اشتري/, 'saved topics without keywords get the built-in ones');
+  assert.equal(handoff.matchTopic('بدي أشتري جهاز مستعمل')?.id, 'sales');
+  assert.equal(handoff.matchTopic('بدي جهاز مستعمل')?.id, 'sales');
+  assert.equal(handoff.matchTopic('الشاشة خربانة')?.id, 'maintenance');
+  assert.equal(handoff.matchTopic('شو ساعات الدوام؟'), null);
+
+  const leads = [];
+  handoff.registerWhatsAppSender(async (phone, text) => leads.push({ phone, text }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  const msg = { channel: 'whatsapp', externalId: '971507778888@s.whatsapp.net', name: 'Ali', handle: '+971507778888', convMeta: { phone: '+971507778888' } };
+  mods.inbox.handleIncoming({ ...msg, text: 'بدي جهاز مستعمل', messageId: 'ar1' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.match(sent[0], /أي جهاز بدك/);
+  let conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === msg.externalId);
+  assert.equal(conv.meta.handoffStage.topic, 'sales', 'the AI forgot the tag, the keyword still starts the handoff');
+  mods.inbox.handleIncoming({ ...msg, text: 'ايفون 13 مستعمل، الميزانية 1500 درهم، الشارقة', messageId: 'ar2' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(leads.length, 1);
+  assert.equal(leads[0].phone, '+971 55 123 4567');
+  assert.match(leads[0].text, /wa\.me\/971507778888/);
 });
 
 test('handoff: topics get ids, and the old sales setting carries over', async () => {
