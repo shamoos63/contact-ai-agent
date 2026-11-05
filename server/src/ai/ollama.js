@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { getSetting } from '../settings.js';
 import { emit } from '../realtime.js';
 
@@ -116,7 +117,9 @@ export const CATALOG = [
 const sameModel = (a, b) => a === b || a === `${b}:latest` || b === `${a}:latest`;
 
 export async function status() {
-  const base = { downloads: downloadList(), catalog: CATALOG, modelsPath: modelsPath(), timings };
+  // Inside Docker Desktop this is the memory Docker was given, which is what the models must fit in.
+  const memory = { total: os.totalmem(), free: os.freemem(), cpus: os.cpus().length };
+  const base = { downloads: downloadList(), catalog: CATALOG, modelsPath: modelsPath(), timings, memory };
   try {
     const tags = await call('/api/tags', null, { timeoutMs: 5000 });
     const installed = (tags.models || []).map((m) => ({

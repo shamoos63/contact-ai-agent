@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import { config } from './config.js';
 
-const DEFAULTS = {
+export const DEFAULTS = {
   company_name: 'Our Company',
   ollama_url: config.ollamaUrl,
   chat_model: config.chatModel,
@@ -31,6 +31,7 @@ const DEFAULTS = {
         enabled: true,
         when: 'the customer wants to buy, asks for prices or a quote, or asks for more sales details',
         ask: 'which product or service, how many, budget, delivery city',
+        keywords: 'buy, purchase, price, quote, how much, اشتري, أشتري, شراء, سعر, اسعار, أسعار, بكم, عرض سعر, بدي جهاز',
         team: [],
       },
       {
@@ -39,6 +40,7 @@ const DEFAULTS = {
         enabled: true,
         when: 'the customer needs a repair, maintenance or a technician visit',
         ask: 'which device or product, what the problem is, their location',
+        keywords: 'repair, broken, fix, maintenance, technician, صيانة, تصليح, صلح, خربان, معطل, عطل, فني',
         team: [],
       },
       {
@@ -47,6 +49,7 @@ const DEFAULTS = {
         enabled: true,
         when: 'the customer asks about software, licences, installation or a custom software project',
         ask: 'which software or what they want built, how many users, their deadline',
+        keywords: 'software, license, licence, install, برنامج, برامج, تنصيب, تثبيت, ترخيص, نظام',
         team: [],
       },
     ],
@@ -69,12 +72,20 @@ const setStmt = db.prepare(
 
 export function getSetting(key) {
   const row = getStmt.get(key);
-  if (!row && key === 'handoff') return legacyHandoff() || DEFAULTS.handoff;
+  if (!row && key === 'handoff') return withDefaultKeywords(legacyHandoff() || DEFAULTS.handoff);
   const def = DEFAULTS[key];
   if (!row) return def;
   const value = JSON.parse(row.value);
+  if (key === 'handoff') return withDefaultKeywords({ ...def, ...value });
   if (def && typeof def === 'object' && !Array.isArray(def)) return { ...def, ...value };
   return value;
+}
+
+// Topics saved before keywords existed get the built-in keywords for their id.
+function withDefaultKeywords(h) {
+  const categories = (h.categories || []).map((c) =>
+    c.keywords === undefined ? { ...c, keywords: DEFAULTS.handoff.categories.find((d) => d.id === c.id)?.keywords || '' } : c);
+  return { ...h, categories };
 }
 
 // Before topics existed there was one "sales_handoff" setting: carry it over as the Sales topic.

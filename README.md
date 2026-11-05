@@ -65,6 +65,13 @@ Open **AI engine → Speed**. It shows whether the model runs on the graphics ca
     `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`
   - *Windows, easiest and fastest (NVIDIA or AMD):* install the [Ollama app for Windows](https://ollama.com/download/windows), which uses the card automatically. Copy the models into it so nothing downloads again: copy the contents of `ollama-models` into `%USERPROFILE%\.ollama\models`. Then add `OLLAMA_URL=http://host.docker.internal:11434` to `.env` and start only the dashboard with `docker compose up -d --no-deps app` (stop the Docker Ollama first with `docker compose stop ollama`).
 - **No graphics card?** Pick the smaller `qwen2.5:3b` on the AI engine page: about twice as fast, with simpler answers.
+- **Give Docker enough memory.** The Speed card shows how much memory Docker can use. `qwen2.5:7b` plus the search model need about 7 GB. On Windows, Docker Desktop gets half of your RAM by default; to give it more, create `%USERPROFILE%\.wslconfig` with
+  ```
+  [wsl2]
+  memory=12GB
+  processors=8
+  ```
+  then run `wsl --shutdown` in PowerShell and start Docker Desktop again. If the laptop has 8 GB of RAM in total, use `qwen2.5:3b`.
 
 ## Running without Docker
 
@@ -112,6 +119,7 @@ Under **Team handoff**, add a topic for each kind of request a person should tak
 - **Hand off when the customer…**: e.g. "needs a repair, maintenance or a technician visit".
 - **First ask them for**: the details the team needs, e.g. "which device, what the problem is, their location".
 - **Send to**: one or more people (name, WhatsApp number with country code, optional email).
+- **Keywords** (optional): words that always mean this topic, in Arabic or English, e.g. `اشتري, شراء, سعر, بدي جهاز, buy, price`. When a customer's message contains one, the AI is told to follow the handoff steps, so it can't just answer from the knowledge instead. Spelling variants like أ/ا and ة/ه are matched too. The three starting topics come with keywords.
 
 The conversation then goes like this:
 

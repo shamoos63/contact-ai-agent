@@ -3,7 +3,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api.js';
 import { PageHeader } from '../components/ui.jsx';
 
-const NEW_TOPIC = { name: '', enabled: true, when: '', ask: '', team: [{ name: '', phone: '', email: '' }] };
+const NEW_TOPIC = { name: '', enabled: true, when: '', ask: '', keywords: '', team: [{ name: '', phone: '', email: '' }] };
 
 export default function Handoff() {
   const [h, setH] = useState(null);
@@ -68,6 +68,11 @@ export default function Handoff() {
           <label>
             First ask them for
             <input dir="auto" value={c.ask} placeholder="which device, what the problem is, their location" onChange={(e) => setCat(i, { ask: e.target.value })} />
+          </label>
+          <label>
+            Keywords (optional)
+            <input dir="auto" value={c.keywords || ''} placeholder="اشتري, شراء, سعر, بدي جهاز, buy, price" onChange={(e) => setCat(i, { keywords: e.target.value })} />
+            <small className="muted">Comma separated. When a customer's message contains one of these, the AI always follows the handoff steps for this topic.</small>
           </label>
           <div className="stack">
             <span className="label">Send to</span>

@@ -193,6 +193,12 @@ function SpeedCard({ engine, chatModel }) {
     tips.push('The model is running on the processor. A graphics card makes replies 5 to 20 times faster. See "Making replies faster" in the README: on Windows the easiest way is to install the Ollama app directly, which uses your NVIDIA or AMD card automatically.');
   }
   if (last && last.loadMs > 10000) tips.push(`Loading the model took ${secs(last.loadMs)}. That happens once; the model now stays in memory for 24 hours between messages.`);
+  const gb = (b) => `${(b / 1e9).toFixed(1)} GB`;
+  const chatSize = engine.installed?.find((m) => m.name === chatModel || m.name === `${chatModel}:latest`)?.size;
+  if (engine.memory && chatSize && engine.memory.total < chatSize + 3e9) {
+    tips.push(`Docker only has ${gb(engine.memory.total)} of memory, and ${chatModel} needs about ${gb(chatSize + 2e9)} with the search model. When it doesn't fit, the computer swaps to disk and a reply can take minutes. Give Docker more memory (see "Making replies faster" in the README) or use qwen2.5:3b.`);
+  }
+  if (last && last.promptMs > 20000) tips.push(`Reading the question and the matching knowledge (${last.promptTokens} tokens) took ${secs(last.promptMs)}. On a processor this is usually the slowest part. qwen2.5:3b reads about 2.5 times faster.`);
   if (last && last.tokensPerSecond && last.tokensPerSecond < 8) tips.push(`The model writes ${last.tokensPerSecond} tokens (word pieces) per second. A smaller model like qwen2.5:3b is about twice as fast, with simpler answers.`);
   return (
     <section className="card">
@@ -202,6 +208,12 @@ function SpeedCard({ engine, chatModel }) {
           <span className="grow">Chat model running on</span>
           {where ? <span className={where[0]}>{where[1]}</span> : <span className="muted">Not loaded yet (loads with the first message)</span>}
         </div>
+        {engine.memory && (
+          <div className="list-row">
+            <span className="grow">Memory and processor cores Docker can use</span>
+            <span>{(engine.memory.total / 1e9).toFixed(1)} GB · {engine.memory.cpus} cores</span>
+          </div>
+        )}
         {last && (
           <div className="list-row">
             <span className="grow">Last reply took</span>

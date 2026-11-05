@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from './ollama.js';
 import { search } from '../kb/index.js';
-import { handoffPrompt, takeTags, allowRedirect } from '../handoff.js';
+import { handoffPrompt, handoffReminder, matchTopic, takeTags, allowRedirect } from '../handoff.js';
 import { getConversation } from '../inbox.js';
 
 export function redirectRules() {
@@ -29,15 +29,17 @@ function wrongLanguage(reply, language) {
   return language === 'Arabic' && !ARABIC.test(reply);
 }
 
-export function buildSystemPrompt(knowledge, language = 'English', conv = null) {
+// The instructions part of the prompt. It is the same from one message to the next, so Ollama can
+// reuse the work it already did on it and only read the new parts (knowledge, latest messages).
+export function buildRulesPrompt(conv = null) {
   const company = getSetting('company_name');
   const base = getSetting('system_prompt').replaceAll('{company}', company);
   const rules = redirectRules().filter(allowRedirect);
   const parts = [
     base,
     '',
-    `LANGUAGE: The customer is writing in ${language}. Write your whole reply in ${language} only. Never answer in Chinese or any other language, even if the knowledge below is in another language.`,
-    'Never invent prices, policies, phone numbers or links. Use only the knowledge and redirect rules below.',
+    'LANGUAGE: Reply in the language of the customer\'s latest message (Arabic or English) only. Never answer in Chinese or any other language, even if the knowledge is in another language.',
+    'Never invent prices, policies, phone numbers or links. Use only the company knowledge and redirect rules.',
     `If the knowledge does not answer the question, reply with this message (translated to the customer's language): "${getSetting('fallback_message')}"`,
   ];
   if (rules.length) {
@@ -46,16 +48,24 @@ export function buildSystemPrompt(knowledge, language = 'English', conv = null) 
   }
   const handoff = handoffPrompt(conv);
   if (handoff) parts.push('', handoff);
-  parts.push('', 'COMPANY KNOWLEDGE:');
+  return parts.join('\n');
+}
+
+export function buildKnowledgePrompt(knowledge) {
+  const parts = ['COMPANY KNOWLEDGE (for the customer\'s latest question):'];
   if (knowledge.length) knowledge.forEach((k, i) => parts.push(`[${i + 1}] (${k.title}) ${k.text}`));
   else parts.push('(no relevant knowledge found for this question)');
   return parts.join('\n');
 }
 
+export function buildSystemPrompt(knowledge, language = 'English', conv = null) {
+  return [buildRulesPrompt(conv), '', buildKnowledgePrompt(knowledge)].join('\n');
+}
+
 // Produce a reply for a conversation, based on its recent history and the knowledge base.
 export async function generateReply(conversationId) {
   const history = db
-    .prepare("SELECT direction, sender, text FROM messages WHERE conversation_id = ? AND error IS NULL AND direction <> 'note' ORDER BY id DESC LIMIT 10")
+    .prepare("SELECT direction, sender, text FROM messages WHERE conversation_id = ? AND error IS NULL AND direction <> 'note' ORDER BY id DESC LIMIT 8")
     .all(conversationId)
     .reverse();
   const messages = history.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text }));
@@ -67,18 +77,24 @@ export async function answer(messages, { conv = null } = {}) {
   const recentUser = messages.filter((m) => m.role === 'user').slice(-3).map((m) => m.content).join('\n');
   let knowledge = [];
   try {
-    knowledge = await search(recentUser, { k: 4 });
+    knowledge = await search(recentUser, { k: 3 });
   } catch (err) {
     console.error('[agent] Knowledge search failed:', err.message);
   }
   const language = detectLanguage(messages);
+  const latest = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
+  const topic = matchTopic(latest, conv);
   const prompt = [
-    { role: 'system', content: buildSystemPrompt(knowledge, language, conv) },
+    // Fixed instructions first, then what changes per message, so the start of the prompt is reused.
+    { role: 'system', content: buildRulesPrompt(conv) },
+    { role: 'system', content: buildKnowledgePrompt(knowledge) },
     ...messages,
-    // A last reminder right before the answer is what keeps small models in the right language.
-    { role: 'system', content: `Answer the customer now, in ${language} only.` },
+    // A last reminder right before the answer is what keeps small models on track.
+    { role: 'system', content: [handoffReminder(conv, topic), `Answer the customer now, in ${language} only.`].filter(Boolean).join('\n') },
   ];
   let { reply, tag } = takeTags(await chat(prompt));
+  // The message clearly matched a topic's keywords but the model forgot the tag: still start the handoff.
+  if (!tag && topic) tag = { type: 'ask', topic: topic.id };
   if (reply && wrongLanguage(reply, language)) {
     console.warn(`[agent] Reply was not in ${language}, asking again`);
     reply = takeTags(await chat(
