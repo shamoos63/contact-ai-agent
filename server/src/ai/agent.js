@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from './ollama.js';
 import { search } from '../kb/index.js';
-import { handoffPrompt, handoffReminder, matchTopic, takeTags, allowRedirect } from '../handoff.js';
+import { handoffPrompt, handoffReminder, matchTopics, takeTags, allowRedirect, pendingTopic, findCategory, confirmMessage } from '../handoff.js';
 import { getConversation } from '../inbox.js';
 
 export function redirectRules() {
@@ -69,7 +69,14 @@ export async function generateReply(conversationId) {
     .all(conversationId)
     .reverse();
   const messages = history.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text }));
-  return answer(messages, { conv: getConversation(conversationId) });
+  const conv = getConversation(conversationId);
+  // The customer just answered the AI's question for a specialist: confirm and hand off straight away.
+  const pending = findCategory(pendingTopic(conv));
+  if (pending) {
+    const language = detectLanguage(messages);
+    return { reply: confirmMessage(language), sources: [], language, tag: { type: 'handoff', topic: pending.id } };
+  }
+  return answer(messages, { conv });
 }
 
 // messages: [{ role: 'user' | 'assistant', content }]; the last one should be from the user.
@@ -83,18 +90,18 @@ export async function answer(messages, { conv = null } = {}) {
   }
   const language = detectLanguage(messages);
   const latest = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
-  const topic = matchTopic(latest, conv);
+  const topics = pendingTopic(conv) ? [] : matchTopics(latest, conv);
   const prompt = [
     // Fixed instructions first, then what changes per message, so the start of the prompt is reused.
     { role: 'system', content: buildRulesPrompt(conv) },
     { role: 'system', content: buildKnowledgePrompt(knowledge) },
     ...messages,
     // A last reminder right before the answer is what keeps small models on track.
-    { role: 'system', content: [handoffReminder(conv, topic), `Answer the customer now, in ${language} only.`].filter(Boolean).join('\n') },
+    { role: 'system', content: [handoffReminder(conv, topics), `Answer the customer now, in ${language} only.`].filter(Boolean).join('\n') },
   ];
   let { reply, tag } = takeTags(await chat(prompt));
   // The message clearly matched a topic's keywords but the model forgot the tag: still start the handoff.
-  if (!tag && topic) tag = { type: 'ask', topic: topic.id };
+  if (!tag && topics.length) tag = { type: 'ask', topic: topics[0].id };
   if (reply && wrongLanguage(reply, language)) {
     console.warn(`[agent] Reply was not in ${language}, asking again`);
     reply = takeTags(await chat(

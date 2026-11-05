@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { getSetting } from './settings.js';
+import { getSetting, DEFAULTS } from './settings.js';
 import { chat } from './ai/ollama.js';
 import { addNote, getConversation, updateMeta } from './inbox.js';
 import { emit } from './realtime.js';
@@ -9,9 +9,13 @@ import { emit } from './realtime.js';
 // and a short brief to that topic's team on WhatsApp (and/or email). The customer never gets the
 // team's own contact.
 
-// The model marks its reply with [ASK:topic] when it asked the customer for details, and
-// [HANDOFF:topic] when the request is ready for the team. [SALES] is the older spelling of [ASK].
-const TAGS = /\[\s*(HANDOFF|ASK|SALES)\s*(?::\s*([\w-]+)\s*)?\]/gi;
+// The flow is short on purpose: when a customer needs a person, the AI asks ONE direct question
+// about their request and marks that reply with [ASK:topic]. Whatever the customer answers, they get
+// a fixed "a specialist will contact you soon" message and the details go to that topic's team.
+// [HANDOFF:topic] (details already given) and [SALES] (older spelling of [ASK]) are still understood.
+// Small models write the topic in many ways ([ASK:maintenance], [ASK: Maintenance request]), so any
+// text is accepted and matched to a topic afterwards.
+const TAGS = /\[\s*(HANDOFF|ASK|SALES)\s*(?::\s*([^\]\n]{1,60}?)\s*)?\]/gi;
 const ASK_HOURS = 24;
 
 const digitsOf = (phone) => String(phone || '').replace(/\D/g, '');
@@ -41,29 +45,61 @@ function simplify(text) {
 
 const keywordsOf = (c) => String(c.keywords || '').split(/[,،\n]/).map((k) => simplify(k).trim()).filter(Boolean);
 
-// The topic whose keywords appear in the customer's message, if it can still be handed off.
+// Topics whose keywords appear in the text, best match first (most keywords, then longest).
+// Topics already handed off for this chat recently are left out.
+export function matchTopics(text, conv) {
+  const t = simplify(text);
+  if (!t) return [];
+  return activeCategories()
+    .filter((c) => !recentlyHandedOff(conv, c.id))
+    .map((c) => {
+      const hits = keywordsOf(c).filter((k) => t.includes(k));
+      return { c, n: hits.length, len: hits.reduce((a, k) => a + k.length, 0) };
+    })
+    .filter((x) => x.n)
+    .sort((a, b) => b.n - a.n || b.len - a.len)
+    .map((x) => x.c);
+}
+
 export function matchTopic(text, conv) {
   if (pendingTopic(conv)) return null;
-  const t = simplify(text);
-  if (!t) return null;
-  return activeCategories().find((c) => !recentlyHandedOff(conv, c.id) && keywordsOf(c).some((k) => t.includes(k))) || null;
+  return matchTopics(text, conv)[0] || null;
 }
 
 // A short reminder at the very end of the prompt. Small models follow that much better than
 // instructions buried before the company knowledge.
-export function handoffReminder(conv, topic) {
-  if (!handoffEnabled()) return null;
-  const pending = findCategory(pendingTopic(conv));
-  if (pending) return `The customer is answering your questions about their ${pending.name} request: thank them, say our team will contact them shortly, and end with [HANDOFF:${pending.id}].`;
-  if (topic) {
-    return `The customer's latest message is a ${topic.name} request. Follow the TEAM HANDOFF steps: if they have not given ${topic.ask || 'the details'} yet, ask for them and end with [ASK:${topic.id}]; if they have, end with [HANDOFF:${topic.id}]. Do not just answer from the knowledge.`;
+export function handoffReminder(conv, topics = []) {
+  if (!handoffEnabled() || pendingTopic(conv)) return null;
+  const list = (Array.isArray(topics) ? topics : [topics]).filter(Boolean);
+  if (list.length === 1) {
+    const t = list[0];
+    return `The customer's latest message needs our ${t.name} team. Do not answer it yourself: ask ONE short, direct question about their request${t.ask ? ` (about: ${t.ask})` : ''} and end with [ASK:${t.id}].`;
   }
-  return 'If the customer\'s latest message matches a TEAM HANDOFF topic, follow those steps and end with the tag.';
+  if (list.length > 1) {
+    return `The customer's latest message may need one of our teams: ${list.map((t) => `${t.name} [ASK:${t.id}]`).join(' or ')}. Pick the one that fits, ask ONE short, direct question about their request, and end with that tag.`;
+  }
+  return 'If the customer\'s latest message needs one of the TEAM HANDOFF topics, ask ONE direct question about it and end with [ASK:id].';
 }
 
-export function findCategory(id, { active = true } = {}) {
+// The message the customer gets after answering the question.
+export function confirmMessage(language) {
+  const s = handoffSettings();
+  return language === 'Arabic' ? s.confirm_message_ar : s.confirm_message_en;
+}
+
+// Find a topic by its id, or by what the model wrote in a tag ("maintenance", "Maintenance request").
+export function findCategory(ref, { active = true } = {}) {
+  if (!ref) return null;
   const list = active ? activeCategories() : handoffSettings().categories || [];
-  return list.find((c) => c.id === id) || null;
+  const exact = list.find((c) => c.id === ref);
+  if (exact) return exact;
+  const r = simplify(ref).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  if (!r) return null;
+  const name = (c) => simplify(c.name).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const id = (c) => c.id.replace(/-/g, ' ');
+  return list.find((c) => name(c) === r || id(c) === r)
+    || list.find((c) => name(c).includes(r) || r.includes(id(c)) || r.includes(name(c)))
+    || null;
 }
 
 export function handoffEnabled() {
@@ -102,6 +138,8 @@ export function normalizeHandoff(value) {
     enabled: !!value?.enabled,
     brief_language: value?.brief_language || 'English',
     cooldown_hours: Number(value?.cooldown_hours) || 24,
+    confirm_message_en: String(value?.confirm_message_en || '').trim() || DEFAULTS.handoff.confirm_message_en,
+    confirm_message_ar: String(value?.confirm_message_ar || '').trim() || DEFAULTS.handoff.confirm_message_ar,
     categories,
   };
 }
@@ -153,29 +191,20 @@ const NO_CONTACT = 'Never give the customer a phone number, WhatsApp link or any
 export function handoffPrompt(conv) {
   const cats = activeCategories();
   if (!cats.length) return null;
-  const pending = findCategory(pendingTopic(conv));
-  if (pending) {
-    return [
-      `REQUEST IN PROGRESS (${pending.name}): You already asked this customer for the details we need. Their latest message is their answer.`,
-      `Thank them, repeat in one short line what they need, and tell them our ${pending.name} team will contact them shortly.`,
-      `Do not ask more questions. ${NO_CONTACT} End your reply with the tag [HANDOFF:${pending.id}].`,
-    ].join(' ');
-  }
   const open = cats.filter((c) => !recentlyHandedOff(conv, c.id));
   const done = cats.filter((c) => recentlyHandedOff(conv, c.id));
-  const lines = [`TEAM HANDOFF: Some requests are passed to a person on our team. Follow these steps instead of any redirect rule. ${NO_CONTACT}`];
+  const lines = [`TEAM HANDOFF: Some requests must be handled by a specialist on our team. ${NO_CONTACT}`];
   if (open.length) {
-    lines.push('Topics (id: when the customer... | details to ask for):');
-    for (const c of open) lines.push(`- ${c.id} (${c.name}): ${c.when || c.name} | ${c.ask || 'what exactly they need'}`);
+    lines.push('Topics (tag: when the customer... | what to ask about):');
+    for (const c of open) lines.push(`- [ASK:${c.id}] ${c.name}: ${c.when || c.name} | ${c.ask || 'what exactly they need'}`);
     lines.push(
-      'When the customer\'s message matches one of these topics:',
-      '1. If they have not yet given the details to ask for, ask for them in one short friendly message and end that reply with the tag [ASK:id], using the topic id.',
-      '2. If they already gave the details, thank them, repeat in one line what they need, say our team will contact them shortly, and end the reply with the tag [HANDOFF:id].',
-      'This applies in Arabic too (for example "بدي اشتري", "بدي جهاز", "عندي عطل"). Use a tag only when the message really matches a topic.',
+      'When the customer\'s message needs one of these topics, do not answer the request yourself and do not use a redirect rule.',
+      'Ask ONE short, direct question about their request (for example about the points listed for that topic), and end that reply with the topic\'s tag, exactly as written above.',
+      'This applies in Arabic too (for example "بدي اشتري", "عندي عطل", "بدي صيانة"). Use a tag only when the message really needs a specialist.',
     );
   }
   if (done.length) {
-    lines.push(`Already passed to our team: ${done.map((c) => c.name).join(', ')}. If the customer asks about that again, tell them our team will contact them soon, and do not use a tag for it.`);
+    lines.push(`Already passed to a specialist: ${done.map((c) => c.name).join(', ')}. If the customer asks about that again, tell them a specialist will contact them soon, and do not use a tag for it.`);
   }
   return lines.join('\n');
 }
@@ -190,32 +219,45 @@ export function takeTags(reply) {
   return { reply: reply.replace(TAGS, '').replace(/[ \t]+\n/g, '\n').trim(), tag };
 }
 
-// A tag without a topic, or with one the model made up, falls back to the topic in progress,
-// then to the only active topic, then to "sales" for the older [SALES]/[HANDOFF] tags.
-function resolveTopic(conv, tag) {
-  if (findCategory(tag?.topic)) return tag.topic;
-  const pending = pendingTopic(conv);
-  if (findCategory(pending)) return pending;
-  const cats = activeCategories();
-  if (cats.length === 1) return cats[0].id;
-  return findCategory('sales') ? 'sales' : null;
+// Which topic a tag means. When the model wrote no topic, or one we don't have, look at the
+// customer's recent messages: first the keywords, then (only if still unclear) ask the model.
+async function resolveTopic(conv, tag) {
+  const named = findCategory(tag?.topic);
+  if (named) return named.id;
+  const pending = findCategory(pendingTopic(conv));
+  if (pending) return pending.id;
+  const cats = activeCategories().filter((c) => !recentlyHandedOff(conv, c.id));
+  if (cats.length <= 1) return cats[0]?.id || null;
+  const recent = db
+    .prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 3")
+    .all(conv.id)
+    .map((m) => m.text)
+    .join('\n');
+  const byKeyword = matchTopics(recent, conv)[0];
+  if (byKeyword) return byKeyword.id;
+  const answer = await chat([{
+    role: 'user',
+    content: `A customer wrote:\n${recent}\n\nWhich of these teams should handle it?\n` +
+      cats.map((c) => `${c.id}: ${c.name} (${c.when})`).join('\n') + '\n\nAnswer with only the id.',
+  }], { temperature: 0 });
+  return findCategory(answer.trim().split(/\s+/)[0]?.replace(/[^\w-]/g, ''))?.id || findCategory(answer)?.id || null;
 }
 
-// What to do after the AI replied: remember that it asked for details, or hand off.
+// What to do after the AI replied: remember which topic it asked about, or hand off.
 export async function afterReply(conversationId, tag) {
   const conv = getConversation(conversationId);
-  if (!conv || !handoffEnabled()) return;
-  const pending = findCategory(pendingTopic(conv));
-  if (pending || tag?.type === 'handoff') {
-    // While waiting on details the customer just answered, so hand off even if the model forgot the tag.
-    const topic = tag?.type === 'handoff' ? resolveTopic(conv, tag) : pending.id;
+  if (!conv || !handoffEnabled() || !tag) return;
+  const topic = await resolveTopic(conv, tag);
+  if (!topic) {
+    addNote(conversationId, 'The AI thinks this customer needs a specialist but could not tell which team. Use "Send to team…" above.');
+    return;
+  }
+  if (tag.type === 'handoff') {
     updateMeta(conversationId, { handoffStage: null, salesStage: null });
-    if (topic && !recentlyHandedOff(conv, topic)) await handOff(conversationId, { category: topic });
-  } else if (tag?.type === 'ask') {
-    const topic = resolveTopic(conv, tag);
-    if (!topic || recentlyHandedOff(conv, topic)) return;
+    if (!recentlyHandedOff(conv, topic)) await handOff(conversationId, { category: topic });
+  } else if (!recentlyHandedOff(conv, topic)) {
     updateMeta(conversationId, { handoffStage: { topic, at: Date.now() } });
-    addNote(conversationId, `${findCategory(topic).name}: asked the customer for details. Their answer goes to the team.`);
+    addNote(conversationId, `${findCategory(topic).name}: asked the customer one question. Their answer goes to the team.`);
   }
 }
 

@@ -43,30 +43,30 @@ export function startMockOllama() {
       }
       const knows = system.includes('9am to 6pm');
       const lastUser = [...data.messages].reverse().find((m) => m.role === 'user')?.content || '';
+      if (lastUser.includes('Which of these teams should handle it?')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: /printer/i.test(lastUser) ? 'maintenance' : 'none' } }));
+      }
       if (lastUser.includes('Write a brief for our Sales team')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Wants 3 iPhone 16 phones, delivery to Dubai this week.' } }));
       }
       if (lastUser.includes('Write a brief for our Maintenance request team')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Laptop screen is broken, customer is in Sharjah.' } }));
       }
-      const inProgress = system.match(/REQUEST IN PROGRESS \(.*?\)[\s\S]*?\[HANDOFF:([\w-]+)\]/);
-      if (inProgress) {
-        return res.end(JSON.stringify({ message: { role: 'assistant', content: `Thank you! Our team will contact you shortly. [HANDOFF:${inProgress[1]}]` } }));
-      }
       // Like a small model that answers from the knowledge and forgets the tag, unless reminded at the end.
       if (/[\u0600-\u06FF]/.test(lastUser) && system.includes('TEAM HANDOFF:') && !/\d/.test(lastUser)) {
-        const reminded = data.messages.at(-1).content.includes('latest message is a Sales request');
+        const reminded = data.messages.at(-1).content.includes('needs our Sales team');
         return res.end(JSON.stringify({ message: { role: 'assistant', content: reminded ? 'أكيد! أي جهاز بدك، وكم ميزانيتك، ووين التوصيل؟' : 'نعم، نبيع أجهزة مستعملة.' } }));
       }
       if (system.includes('TEAM HANDOFF:')) {
         const detailed = /\d/.test(lastUser);
-        if (/want to buy/i.test(lastUser) && system.includes('- sales (')) {
+        if (/want to buy/i.test(lastUser) && system.includes('[ASK:sales]')) {
           return res.end(JSON.stringify({ message: { role: 'assistant', content: detailed
             ? 'Great, 3 iPhones noted. Our team will contact you shortly. [HANDOFF:sales]'
             : 'Happy to help! Which product do you need, how many, and to which city? [ASK:sales]' } }));
         }
-        if (/repair|broken/i.test(lastUser) && system.includes('- maintenance (')) {
-          return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Sorry to hear that! Which device is it, what is the problem, and where are you? [ASK:maintenance]' } }));
+        if (/repair|broken/i.test(lastUser) && system.includes('[ASK:maintenance]')) {
+          // Written the way small models often do: with the topic's name instead of its id.
+          return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Sorry to hear that! Which device is it, what is the problem, and where are you? [ASK: Maintenance request]' } }));
         }
       }
       if (/what is toptech/i.test(lastUser)) {
