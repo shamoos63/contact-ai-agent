@@ -6,7 +6,8 @@ services:
       - "3000:3000"
     env_file: .env
     environment:
-      OLLAMA_URL: http://ollama:11434
+      # Defaults to the Ollama container; set OLLAMA_URL in .env to use the Ollama app on this computer instead.
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       DATA_DIR: /data
       OLLAMA_MODELS_PATH: the "ollama-models" folder inside your contact-ai-agent project folder
     volumes:
