@@ -25,9 +25,9 @@ export async function handleVoiceNote({ buffer, ext, duration, ...incoming }) {
     return;
   }
   try {
-    const { text } = await transcribe(buffer);
+    const { text, language } = await transcribe(buffer);
     if (!text) throw new Error('No speech found in the recording');
-    handleIncoming({ ...incoming, text, meta: { ...meta, transcribed: true } });
+    handleIncoming({ ...incoming, text, meta: { ...meta, transcribed: true, spokenLanguage: language || null } });
   } catch (err) {
     console.error('[voice] Transcription failed:', err.message);
     const id = handleIncoming({ ...incoming, text: '🎤 Voice note', meta: { ...meta, transcribeError: err.message }, autoReply: false });

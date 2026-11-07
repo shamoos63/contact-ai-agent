@@ -88,15 +88,44 @@ export function transcribe(buffer) {
     const started = Date.now();
     const audio = await decodeAudio(buffer);
     const asr = await loadModel();
-    const language = LANGUAGES[getSetting('voice').language] ?? null;
+    // transformers.js does not detect the language itself: without one it assumes English and turns
+    // Arabic speech into English. So in "auto" mode we ask the model which one it hears first.
+    const language = LANGUAGES[getSetting('voice').language] ?? (await detectSpokenLanguage(asr, audio));
     const out = await asr(audio, { task: 'transcribe', language, chunk_length_s: 30, stride_length_s: 5 });
     const text = (Array.isArray(out) ? out.map((o) => o.text).join(' ') : out.text || '').trim();
     const ms = Date.now() - started;
     console.log(`[speech] Transcribed ${(audio.length / 16000).toFixed(1)}s of audio in ${(ms / 1000).toFixed(1)}s`);
-    return { text, ms, seconds: audio.length / 16000 };
+    return { text, ms, seconds: audio.length / 16000, language };
   });
   queue = run.catch(() => {});
   return run;
+}
+
+// Whisper's first output token is the language. Run the model one step on the first 30 seconds and
+// compare how likely Arabic and English are. On any error it returns null (Whisper then assumes English).
+const DETECT = ['arabic', 'english'];
+export async function detectSpokenLanguage(asr, audio) {
+  try {
+    if (!asr.model || !asr.processor) return null;
+    const { Tensor } = await import('@huggingface/transformers');
+    const { input_features } = await asr.processor(audio.subarray(0, 16000 * 30));
+    const gc = asr.model.generation_config || {};
+    const start = gc.decoder_start_token_id;
+    const ids = { arabic: gc.lang_to_id?.['<|ar|>'], english: gc.lang_to_id?.['<|en|>'] };
+    if (start == null || ids.arabic == null || ids.english == null) return null;
+    const out = await asr.model({
+      input_features,
+      decoder_input_ids: new Tensor('int64', BigInt64Array.from([BigInt(start)]), [1, 1]),
+    });
+    const [, steps, vocab] = out.logits.dims;
+    const row = out.logits.data.subarray((steps - 1) * vocab, steps * vocab);
+    const best = DETECT.reduce((a, b) => (row[ids[b]] > row[ids[a]] ? b : a));
+    console.log(`[speech] Language: ${best} (ar ${row[ids.arabic].toFixed(1)}, en ${row[ids.english].toFixed(1)})`);
+    return best;
+  } catch (err) {
+    console.warn('[speech] Could not detect the language:', err.message);
+    return null;
+  }
 }
 
 // Test hook: replace the model with a fake one.
