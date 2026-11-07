@@ -53,7 +53,7 @@ If Ollama is installed directly (not in Docker), its models folder is `%USERPROF
 > ```
 > After checking the models appear on the AI engine page, you can remove the old volume with `docker volume rm contact-ai-agent_ollama`.
 
-> On a Mac, Ollama inside Docker cannot use the Apple GPU. For much faster replies install the Ollama app on the Mac itself, remove the `ollama` service from `docker-compose.yml`, and set `OLLAMA_URL=http://host.docker.internal:11434` in `.env`.
+> On a Mac, Ollama inside Docker cannot use the Apple GPU. For much faster replies install the [Ollama app for Mac](https://ollama.com/download/mac), run `ollama pull qwen2.5:7b` and `ollama pull bge-m3`, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env`, and start only the dashboard with `docker compose up -d --build --no-deps app`.
 
 ## Making replies faster
 
