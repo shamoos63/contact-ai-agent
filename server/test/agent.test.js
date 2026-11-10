@@ -596,5 +596,9 @@ test('assistant: made-up numbers are ignored, Arabic names find Latin contacts, 
   reply = await say('احكي مع منى قلو كيفك', { action: 'send_message', to: 'منى', text: 'كيفك' }, 'm3');
   assert.match(reply, /Mona Client/);
   await say('لا', null, 'm4');
+  // Called "chat" by the model, but it is a message to someone.
+  reply = await say('احكي مع محمد قلو الطلب جاهز', { action: 'chat', reply: 'حسنًا، سأتحدث مع محمد' }, 'm5');
+  assert.match(reply, /Mohammad Saleh/);
+  await say('لا', null, 'm6');
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
