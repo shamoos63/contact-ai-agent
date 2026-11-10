@@ -596,5 +596,64 @@ test('assistant: made-up numbers are ignored, Arabic names find Latin contacts, 
   reply = await say('احكي مع منى قلو كيفك', { action: 'send_message', to: 'منى', text: 'كيفك' }, 'm3');
   assert.match(reply, /Mona Client/);
   await say('لا', null, 'm4');
+  // Called "chat" by the model, but it is a message to someone.
+  reply = await say('احكي مع محمد قلو الطلب جاهز', { action: 'chat', reply: 'حسنًا، سأتحدث مع محمد' }, 'm5');
+  assert.match(reply, /Mohammad Saleh/);
+  await say('لا', null, 'm6');
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('assistant: each owner remembers their own contacts and picks between people with the same name', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [
+    { name: 'Hisham', phone: '+963944111222' }, { name: 'Rami', phone: '+963944333444' },
+  ] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const hisham = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  const rami = { ...hisham, externalId: '963944333444@s.whatsapp.net', handle: '+963944333444', convMeta: { phone: '+963944333444' } };
+  const say = async (who, text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...who, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 300));
+    return sent.filter((m) => m.to === who.externalId).at(-1).text;
+  };
+
+  // Saving: the number comes from what Hisham wrote, never from the model.
+  let reply = await say(hisham, 'احفظ رقم نور 0501112233', { action: 'save_contact', to: 'نور', text: null }, 'n0');
+  assert.match(reply, /رمز الدولة/);
+  reply = await say(hisham, 'احفظ رقم نور +971501112233', { action: 'save_contact', to: 'نور', text: null }, 'n1');
+  assert.match(reply, /حفظت نور: \+971501112233/);
+  reply = await say(hisham, 'save Nour Haddad +971 55 999 8877', { action: 'save_contact', to: 'Nour Haddad +971559990000' }, 'n2');
+  assert.match(reply, /Saved Nour Haddad: \+971559998877\. You now have 2 contacts called Nour;/);
+  reply = await say(hisham, 'save Sami', { action: 'save_contact', to: 'Sami' }, 'n3');
+  assert.match(reply, /What is Sami's number/);
+  await say(hisham, 'no', null, 'n4');
+
+  // "Tell Nour…" asks which Nour, then continues with the one picked.
+  reply = await say(hisham, 'احكي مع نور قلها الاجتماع بكرا', { action: 'send_message', to: 'نور', text: 'الاجتماع بكرا' }, 'n5');
+  assert.match(reply, /أي "نور"؟/);
+  assert.match(reply, /\d\. نور \(\+971501112233\) · محفوظ/);
+  const pick = reply.match(/(\d)\. Nour Haddad \(\+971559998877\) · محفوظ/)[1];
+  reply = await say(hisham, pick, null, 'n6');
+  assert.match(reply, /واتساب إلى Nour Haddad \(\+971559998877\)/);
+  await say(hisham, 'نعم', null, 'n7');
+  assert.ok(sent.some((m) => m.to === '971559998877@s.whatsapp.net'));
+
+  // Rami doesn't see Hisham's contacts.
+  reply = await say(rami, 'tell Nour hi', { action: 'send_message', to: 'Nour', text: 'Hi' }, 'n8');
+  assert.doesNotMatch(reply, /Haddad|971501112233/); // only shared inbox chats, not Hisham's saved list
+  await say(rami, 'no', null, 'n9');
+  reply = await say(rami, 'my contacts', { action: 'contacts' }, 'n10');
+  assert.match(reply, /No saved contacts/);
+
+  // Listing and forgetting.
+  reply = await say(hisham, 'شو الأرقام المحفوظة', { action: 'contacts' }, 'n11');
+  assert.match(reply, /Nour Haddad: \+971559998877/);
+  reply = await say(hisham, 'امسح رقم نور', { action: 'forget_contact', to: 'نور' }, 'n12');
+  assert.match(reply, /أي واحد امسح/);
+  reply = await say(hisham, '١٢'.charAt(reply.split('\n').findIndex((l) => /نور \(/.test(l)) - 1), null, 'n13');
+  assert.match(reply, /مسحت نور/);
+  assert.equal(assistant.listOwnerContacts(assistant.ownerKey({ phone: '+963944111222' })).length, 1);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });

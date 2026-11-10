@@ -100,6 +100,16 @@ CREATE TABLE IF NOT EXISTS tasks (
   done_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(status, run_at);
+-- Names and numbers each assistant owner asked the bot to remember. Each owner has their own list.
+CREATE TABLE IF NOT EXISTS owner_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  phone TEXT,
+  email TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_owner_contacts ON owner_contacts(owner_key);
 
 CREATE TABLE IF NOT EXISTS email_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

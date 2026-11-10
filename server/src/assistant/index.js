@@ -116,7 +116,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['reminder', 'schedule', 'send_message', 'send_email', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -153,11 +153,15 @@ function systemPrompt(owner, language) {
     '  schedule: put an appointment or meeting in their calendar ("I have a meeting with Sami on Thursday at 4").',
     '  send_message: send a WhatsApp message to another person (a client or colleague), now or at a time.',
     '  send_email: send an email to someone, now or at a time.',
+    '  save_contact: remember a person\'s number or email for later ("Nour\'s number is +971…", "احفظ رقم نور 0944…", "خلي رقم سامي عندك"). Put the name in "to".',
+    '  forget_contact: delete a saved contact ("forget Nour", "امسح رقم نور"). Put the name in "to".',
+    '  contacts: show their saved contacts ("my contacts", "شو الأرقام المحفوظة").',
     '  list: show their upcoming tasks (for one day: put that day in "when").',
     '  cancel: cancel a task by its number (#).',
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
-    '  chat: anything else; answer briefly in "reply".',
+    '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
+    '  Any request to tell, message or talk to another person ("احكي مع", "قلو", "قلها", "ابعت لـ", "tell", "message") is send_message, never chat.',
     `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
     `- text: for reminder and schedule, what to remember, short, in ${language}, without "remind me" and without the date or time. For send_message and send_email, a first draft of the message written TO the recipient (carry out the owner's instructions, e.g. "tell him how are you" becomes a greeting asking how they are), WITHOUT the delivery time ("tomorrow at 10" is for "when", not for the message).`,
     '- to: for send_message the person\'s name or the phone number exactly as written in the message (digits and +); for send_email the email address or name. Otherwise null.',
@@ -190,12 +194,19 @@ const REMIND_ME = /^\s*(please\s+)?(remind\s+me\s+(to\s+|about\s+|that\s+)?|ذك
 const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكرة|غدا|غدًا|غداً|اليوم|الأحد|الاحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الاربعاء|الخميس|الجمعة|السبت)|(on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday))?[\s,،]*(الساعة|الساعه|ع\s*الساعة|at)\s*\d{1,2}([:.]\d{2})?\s*(الصبح|الصباح|صباحا|صباحاً|المسا|المساء|مساء|مساءً|العصر|عصرا|الظهر|ظهرا|بالليل|am|pm|a\.m\.|p\.m\.)?[\s.!]*$/i;
 const TIME_LEAD = /^\s*(((on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday)|بكرا|بكره|بكرة|غدا|غداً|اليوم)(?=\s|$))?\s*((at|الساعة|الساعه)\s*\d{1,2}([:.]\d{2})?\s*(am|pm|الصبح|الصباح|المسا|المساء|العصر|الظهر)?)?\s*(to\s+|إنو\s+|انو\s+)?/i;
 const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|ربع\s+ساعة|دقيقة|دقيقتين|\d+\s*(ساعات|ساعة|دقيقة|دقايق|دقائق))|in\s+(an?\s+hour|half\s+an\s+hour|\d+\s*(hours?|minutes?|mins?)))\s*(to\s+)?/i;
+const SPEECH = /(^|\s)(احكي مع|احكي ل|احكيلو|احكيلها|قلو|قله|قلها|قوللو|قول ل|قولي ل|خبر|خبرو|خبرها|بلغ|بلغو|ابعت ل|ابعتلو|ابعتلها|راسل|tell|message|text|let \S+ know)(?=\s|$)/i;
 const PHONE = /\+?\d[\d\s-]{6,}\d/;
 
 // Small models get some things wrong; check them against what the owner actually wrote.
 export function fixCommand(cmd, text, language) {
   const tz = timeZone();
   const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  // "احكي مع X قلو…" / "tell X…" is always a message to someone, even when the model calls it chat.
+  if (['chat', 'help'].includes(cmd.action) && SPEECH.test(text) && !/@/.test(text)) {
+    cmd.action = 'send_message';
+    cmd.text = null;
+    cmd.reply = null;
+  }
   cmd.text = clean(cmd.text);
   cmd.to = clean(cmd.to);
   cmd.when = clean(cmd.when);
@@ -330,16 +341,72 @@ function contactList() {
     });
 }
 
-function resolveRecipient(to, language, said = '') {
+// A number without a country code ("0501234567") could belong to any country, so it is never guessed.
+const isLocalNumber = (v) => /^\s*0(?!0)/.test(String(v || '').replace(/[^\d+]/g, ''));
+const needCountryCode = (language) => say(language,
+  'Please send the number with its country code, e.g. +971 50 123 4567, so it reaches the right person.',
+  'ابعتلي الرقم مع رمز الدولة، مثلاً ‎+963 944 123 456‎، لحتى يوصل للشخص الصح.');
+
+// --- Saved contacts (each owner has their own) ---
+export function ownerKey(owner) {
+  const d = digitsOf(owner?.phone);
+  if (d.length >= 7) return d.slice(-9);
+  const t = String(owner?.telegram || '').trim().replace(/^@/, '').toLowerCase();
+  return t ? `tg:${t}` : null;
+}
+
+export function listOwnerContacts(key) {
+  return key
+    ? db.prepare('SELECT * FROM owner_contacts WHERE owner_key = ? ORDER BY name COLLATE NOCASE').all(key)
+    : db.prepare('SELECT * FROM owner_contacts ORDER BY owner_key, name COLLATE NOCASE').all();
+}
+
+export function saveOwnerContact(key, { name, phone, email }) {
+  const n = String(name || '').trim();
+  const p = digitsOf(phone).length >= 7 ? '+' + digitsOf(phone) : null;
+  const e = String(email || '').trim() || null;
+  if (!key) throw new Error('Unknown owner');
+  if (!n) throw new Error('A name is required');
+  if (!p && !e) throw new Error('A phone number or email is required');
+  if (p && isLocalNumber(phone)) throw new Error('Add the country code to the number, e.g. +971 50 123 4567');
+  const same = listOwnerContacts(key).find((c) => c.name.toLowerCase() === n.toLowerCase() && ((p && samePhone(c.phone, p)) || (e && c.email === e)));
+  if (same) return { contact: same, existed: true };
+  const id = db.prepare('INSERT INTO owner_contacts (owner_key, name, phone, email) VALUES (?, ?, ?, ?)').run(key, n, p, e).lastInsertRowid;
+  emit('owner_contacts', { changed: true });
+  return { contact: db.prepare('SELECT * FROM owner_contacts WHERE id = ?').get(id), existed: false };
+}
+
+export function deleteOwnerContact(id) {
+  db.prepare('DELETE FROM owner_contacts WHERE id = ?').run(id);
+  emit('owner_contacts', { changed: true });
+}
+
+// A saved contact as a send target, reusing their WhatsApp chat when there is one.
+function savedTarget(c) {
+  const conv = db.prepare("SELECT * FROM conversations WHERE channel = 'whatsapp'").all()
+    .map((x) => ({ ...x, meta: JSON.parse(x.meta || '{}') }))
+    .find((x) => samePhone(phoneOf(x), c.phone));
+  return { ...(conv ? { conversationId: conv.id } : { phone: c.phone }), label: `${c.name} (${c.phone})`, saved: true };
+}
+
+const chooseList = (options, language) => options.map((o, i) => `${i + 1}. ${o.label}${o.saved ? say(language, ' · saved', ' · محفوظ') : ''}`).join('\n');
+
+function resolveRecipient(to, language, said = '', owner = null) {
   let wanted = String(to || '').trim();
   // No name from the model: look for a known contact's name in what the owner wrote.
+  const saved = listOwnerContacts(ownerKey(owner)).filter((c) => c.phone);
   if (!wanted && said) {
     const words = nameWords(said);
+    const wordHit = (name) => nameWords(name).some((n) => words.some((w) => n.length >= 3 && skeleton(n).length >= 2 && (w.toLowerCase() === n.toLowerCase() || skeleton(w) === skeleton(n))));
+    const mine = saved.filter((c) => wordHit(c.name)).map(savedTarget);
+    if (mine.length === 1) return mine[0];
+    if (mine.length > 1) return { choose: mine, wanted: '' };
     const hits = contactList().filter((c) => c.name && nameWords(c.name).some((n) => words.some((w) => n.length >= 3 && skeleton(n).length >= 2 && (w.toLowerCase() === n.toLowerCase() || skeleton(w) === skeleton(n)))));
     if (hits.length === 1) return hits[0];
   }
   if (!wanted) return { ask: say(language, 'Who should I send it to? Send me their name or number.', 'لمين بدك ابعتها؟ ابعتلي الاسم أو الرقم.') };
   const digits = digitsOf(wanted);
+  if (digits.length >= 7 && isLocalNumber(wanted)) return { ask: needCountryCode(language) };
   if (digits.length >= 7) {
     const conv = db.prepare("SELECT * FROM conversations WHERE channel = 'whatsapp'").all()
       .map((c) => ({ ...c, meta: JSON.parse(c.meta || '{}') }))
@@ -348,7 +415,10 @@ function resolveRecipient(to, language, said = '') {
       ? { conversationId: conv.id, label: `${conv.contact_name || phoneOf(conv)} (${phoneOf(conv)})` }
       : { phone: '+' + digits, label: '+' + digits };
   }
-  const found = contactList().filter((c) => nameMatches(c.name, wanted) || String(c.handle || '').toLowerCase().includes(wanted.toLowerCase())).slice(0, 10);
+  const mine = saved.filter((c) => nameMatches(c.name, wanted)).map(savedTarget);
+  const fromChats = contactList().filter((c) => nameMatches(c.name, wanted) || String(c.handle || '').toLowerCase().includes(wanted.toLowerCase())).slice(0, 10)
+    .filter((c) => !mine.some((m) => m.conversationId === c.conversationId));
+  const found = [...mine, ...fromChats];
   const team = teamContacts()
     .filter((m) => m.phone && m.name && nameMatches(m.name, wanted))
     .map((m) => ({ phone: m.phone, label: `${m.name} (${m.phone})` }));
@@ -357,8 +427,7 @@ function resolveRecipient(to, language, said = '') {
   if (!all.length) {
     return { ask: say(language, `I couldn't find "${wanted}" in your chats. Send me their WhatsApp number.`, `ما لقيت "${wanted}" بالمحادثات. ابعتلي رقم الواتساب تبعه.`) };
   }
-  const options = all.slice(0, 5).map((r) => `• ${r.label}`).join('\n');
-  return { ask: say(language, `I found more than one "${wanted}":\n${options}\nSend the request again with the number.`, `لقيت أكتر من "${wanted}":\n${options}\nابعت الطلب مرة تانية مع الرقم.`) };
+  return { choose: all.slice(0, 9), wanted };
 }
 
 function resolveEmail(to, language) {
@@ -424,8 +493,8 @@ function needTime(cmd, language) {
 
 function helpText(language) {
   return say(language,
-    'I can:\n• ⏰ Remind you: "remind me tomorrow at 9 to call Ahmad"\n• 📅 Save appointments: "meeting with Sami Thursday at 4"\n• 💬 Message a client: "tell Huda her order is ready" (now or at a time)\n• ✉️ Send an email: "email sami@x.com the price list"\n• 📋 "what do I have tomorrow?" · "cancel #12" · "summary of today"\nVoice notes work too.',
-    'بقدر:\n• ⏰ ذكّرك: "ذكرني بكرا الساعة 9 اتصل بأحمد"\n• 📅 احفظ مواعيد: "عندي اجتماع مع سامي الخميس الساعة 4"\n• 💬 ابعت رسالة لزبون: "قول لهدى إنو طلبها جاهز" (هلق أو بوقت محدد)\n• ✉️ ابعت إيميل: "ابعت لـ sami@x.com قائمة الأسعار"\n• 📋 "شو عندي بكرا؟" · "الغي #12" · "ملخص اليوم"\nوالرسائل الصوتية كمان بتشتغل.');
+    'I can:\n• 📇 Remember numbers: "save Nour +971 50 123 4567", then just "tell Nour…"\n• ⏰ Remind you: "remind me tomorrow at 9 to call Ahmad"\n• 📅 Save appointments: "meeting with Sami Thursday at 4"\n• 💬 Message a client: "tell Huda her order is ready" (now or at a time)\n• ✉️ Send an email: "email sami@x.com the price list"\n• 📋 "what do I have tomorrow?" · "cancel #12" · "summary of today"\nVoice notes work too.',
+    'بقدر:\n• 📇 احفظ أرقام: "احفظ رقم نور 0501234567"، وبعدين بس قول "احكي مع نور…"\n• ⏰ ذكّرك: "ذكرني بكرا الساعة 9 اتصل بأحمد"\n• 📅 احفظ مواعيد: "عندي اجتماع مع سامي الخميس الساعة 4"\n• 💬 ابعت رسالة لزبون: "قول لهدى إنو طلبها جاهز" (هلق أو بوقت محدد)\n• ✉️ ابعت إيميل: "ابعت لـ sami@x.com قائمة الأسعار"\n• 📋 "شو عندي بكرا؟" · "الغي #12" · "ملخص اليوم"\nوالرسائل الصوتية كمان بتشتغل.');
 }
 
 export function todaySummary(language, ownerConvId = null) {
@@ -477,8 +546,16 @@ async function act(cmd, conv, owner, language) {
     case 'send_message':
     case 'send_email': {
       const isEmail = cmd.action === 'send_email';
-      const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language, cmd.said);
+      const target = cmd.target || (isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language, cmd.said, owner));
       if (target.ask) return asking(target.ask);
+      // Several people with that name: list them and continue with the one the owner picks.
+      if (target.choose) {
+        updateMeta(conv.id, { assistantChoice: { cmd, options: target.choose, language, at: Date.now() } });
+        const who = target.wanted ? `"${target.wanted}"` : say(language, 'person', 'شخص');
+        return asking(say(language,
+          `Which ${who}?\n${chooseList(target.choose, language)}\nReply with the number (1, 2…) or "no" to cancel.`,
+          `أي ${who}؟\n${chooseList(target.choose, language)}\nرد بالرقم (1، 2…) أو "لا" للإلغاء.`));
+      }
       // Words in quotes ("…", «…») are sent as written; anything else is an instruction the assistant carries out.
       const quoted = String(cmd.said || '').match(/["“«]([^"”»]{2,})["”»]/)?.[1]?.trim();
       if (quoted || /بالحرف|word for word|exactly/i.test(cmd.said || '')) cmd.text = quoted || cmd.text;
@@ -527,6 +604,38 @@ async function act(cmd, conv, owner, language) {
       finishTask(id, 'cancelled', `Cancelled by ${owner.name || 'owner'}`);
       return say(language, `🗑️ Cancelled #${id}.`, `🗑️ انلغت #${id}.`);
     }
+    case 'save_contact': {
+      const name = String(cmd.to || '').replace(/\+?\d[\d\s-]{5,}\d/g, '').replace(/[^\p{L}\p{N}\s.'-]/gu, ' ').replace(/\s+/g, ' ').trim();
+      const phone = (cmd.said || '').match(PHONE)?.[0];
+      const email = (cmd.said || '').match(/[^\s<>"'،,]+@[^\s<>"'،,]+\.[a-z]{2,}/i)?.[0];
+      if (!name) return asking(say(language, 'What name should I save it under?', 'باسم مين بدك احفظه؟'));
+      if (!(phone && digitsOf(phone).length >= 7) && !email) return asking(say(language, `What is ${name}'s number?`, `شو رقم ${name}؟`));
+      if (phone && isLocalNumber(phone)) return asking(needCountryCode(language));
+      const { contact, existed } = saveOwnerContact(ownerKey(owner), { name, phone, email });
+      const first = nameWords(name)[0] || name;
+      const others = listOwnerContacts(ownerKey(owner)).filter((c) => c.id !== contact.id && (nameMatches(c.name, first) || nameMatches(first, c.name))).length;
+      const where = [contact.phone, contact.email].filter(Boolean).join(', ');
+      if (existed) return say(language, `👍 I already have ${contact.name}: ${where}.`, `👍 ${contact.name} محفوظ عندي: ${where}.`);
+      return say(language, `📇 Saved ${contact.name}: ${where}.`, `📇 حفظت ${contact.name}: ${where}.`)
+        + (others ? say(language, ` You now have ${others + 1} contacts called ${first}; I'll ask which one when you mention them.`, ` صار عندك ${others + 1} بنفس الاسم، رح اسألك أي واحد لما تذكره.`) : '');
+    }
+    case 'forget_contact': {
+      const wanted = String(cmd.to || '').trim();
+      const hits = listOwnerContacts(ownerKey(owner)).filter((c) => wanted && nameMatches(c.name, wanted));
+      if (!hits.length) return say(language, `I don't have "${wanted}" saved.`, `ما عندي "${wanted}" محفوظ.`);
+      if (hits.length > 1) {
+        const options = hits.map((c) => ({ contactId: c.id, label: `${c.name} (${c.phone || c.email})` }));
+        updateMeta(conv.id, { assistantChoice: { cmd, options, language, at: Date.now() } });
+        return asking(say(language, `Which one should I delete?\n${chooseList(options, language)}\nReply with the number.`, `أي واحد امسح؟\n${chooseList(options, language)}\nرد بالرقم.`));
+      }
+      deleteOwnerContact(hits[0].id);
+      return say(language, `🗑️ Deleted ${hits[0].name}.`, `🗑️ مسحت ${hits[0].name}.`);
+    }
+    case 'contacts': {
+      const mine = listOwnerContacts(ownerKey(owner));
+      if (!mine.length) return say(language, 'No saved contacts yet. Say e.g. "save Nour +971 50 123 4567".', 'ما في أرقام محفوظة لسا. قول مثلاً "احفظ رقم نور 0501234567".');
+      return `📇 ${say(language, 'Your contacts', 'أرقامك المحفوظة')}:\n${mine.slice(0, 40).map((c) => `• ${c.name}: ${[c.phone, c.email].filter(Boolean).join(', ')}`).join('\n')}`;
+    }
     case 'summary':
       return todaySummary(language, conv.id);
     case 'help':
@@ -570,6 +679,24 @@ async function processOwnerMessage(conversationId) {
         return await reply(say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
     }
+    // The owner picked one of several people with the same name.
+    const choice = conv.meta.assistantChoice;
+    if (choice && Date.now() - choice.at < CONFIRM_MINUTES * 60e3) {
+      const n = Number(String(text).trim().replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).match(/^#?(\d{1,2})\b/)?.[1]);
+      if (n >= 1 && n <= choice.options.length) {
+        updateMeta(conversationId, { assistantChoice: null, assistantAsked: null });
+        const picked = choice.options[n - 1];
+        const lang = choice.language || language; // "2" has no language of its own
+        if (choice.cmd.action === 'forget_contact') {
+          deleteOwnerContact(picked.contactId);
+          return await reply(say(lang, `🗑️ Deleted ${picked.label}.`, `🗑️ مسحت ${picked.label}.`));
+        }
+        const out = await act({ ...choice.cmd, target: picked }, getConversation(conversationId), owner, lang);
+        if (out?.ask) updateMeta(conversationId, { assistantAsked: Date.now() });
+        return await reply(out?.ask || out);
+      }
+    }
+    if (choice) updateMeta(conversationId, { assistantChoice: null });
     const asked = conv.meta.assistantAsked;
     if (asked && Date.now() - asked < CONFIRM_MINUTES * 60e3 && NO.has(firstWord(text))) {
       updateMeta(conversationId, { assistantPending: null, assistantAsked: null });
