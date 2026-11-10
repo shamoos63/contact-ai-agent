@@ -159,7 +159,7 @@ function systemPrompt(owner, language) {
     '  help: what you can do.',
     '  chat: anything else; answer briefly in "reply".',
     `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
-    `- text: for reminder and schedule, what to remember, short, in ${language}, without "remind me" and without the date or time. For send_message and send_email, the message itself, written to the recipient in ${language} unless the owner asks for another language, WITHOUT the delivery time ("tomorrow at 10" is for "when", not for the message).`,
+    `- text: for reminder and schedule, what to remember, short, in ${language}, without "remind me" and without the date or time. For send_message and send_email, a first draft of the message written TO the recipient (carry out the owner's instructions, e.g. "tell him how are you" becomes a greeting asking how they are), WITHOUT the delivery time ("tomorrow at 10" is for "when", not for the message).`,
     '- to: for send_message the person\'s name or the phone number exactly as written in the message (digits and +); for send_email the email address or name. Otherwise null.',
     '- subject: the email subject, or null.',
     '- task_id: for cancel, the task number. Otherwise null.',
@@ -226,7 +226,42 @@ export function fixCommand(cmd, text, language) {
     }
   }
   if (cmd.reply && CJK.test(cmd.reply)) cmd.reply = null;
+  cmd.said = text;
   return cmd;
+}
+
+// The language the recipient wrote to us in, if they have.
+function recipientLanguage(target) {
+  if (!target.conversationId) return null;
+  const last = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 3").all(target.conversationId);
+  return last.length ? detectLanguage([{ role: 'user', content: last.map((m) => m.text).join('\n') }]) : null;
+}
+
+// Turn the owner's instruction ("tell him how are you and introduce yourself") into the message the
+// recipient actually reads, written by the assistant on the owner's behalf.
+async function composeMessage(cmd, target, owner, language, isEmail) {
+  const company = getSetting('company_name');
+  const who = owner.name || 'the owner';
+  const recipient = String(target.label || '').replace(/\s*[(<].*$/, '').trim();
+  const system = [
+    `You write ${isEmail ? 'emails' : 'WhatsApp messages'} on behalf of ${who} at ${company}. You are ${who}'s AI assistant.`,
+    `${who} asked you: «${cmd.said}»`,
+    cmd.text ? `Draft: ${cmd.text}` : '',
+    `Write the ${isEmail ? 'email body' : 'message'} that ${recipient && !/^\+?\d/.test(recipient) ? recipient : 'the recipient'} will read. Do what ${who} meant, not their exact words:`,
+    `- "tell him / قلو / قلها X" means say X to the recipient directly, in your own words.`,
+    `- "introduce yourself / عرفو عن حالك" means say you are ${who}'s assistant at ${company}.`,
+    '- Greet them naturally. Keep it short, warm and polite.',
+    `- Write in ${language}${language === 'Arabic' ? ', in the same dialect the owner used' : ''}, unless ${who} asked for another language. Never use Chinese.`,
+    '- Do not mention when it will be sent, do not add a signature line with placeholders, and do not invent facts, prices or promises.',
+    'Answer with the message text only.',
+  ].filter(Boolean).join('\n');
+  try {
+    const out = (await chat([{ role: 'system', content: system }, { role: 'user', content: 'Write it now.' }], { temperature: 0.3 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
+    if (out && !CJK.test(out)) return out;
+  } catch (err) {
+    console.error('[assistant] Writing the message failed:', err.message);
+  }
+  return cmd.text;
 }
 
 // --- Finding who to send to ---
@@ -395,9 +430,13 @@ async function act(cmd, conv, owner, language) {
     case 'send_message':
     case 'send_email': {
       const isEmail = cmd.action === 'send_email';
-      if (!cmd.text) return asking(say(language, 'What should the message say?', 'شو بدك تقول الرسالة؟'));
       const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language);
       if (target.ask) return asking(target.ask);
+      // Words in quotes ("…", «…») are sent as written; anything else is an instruction the assistant carries out.
+      const quoted = String(cmd.said || '').match(/["“«]([^"”»]{2,})["”»]/)?.[1]?.trim();
+      if (quoted || /بالحرف|word for word|exactly/i.test(cmd.said || '')) cmd.text = quoted || cmd.text;
+      else if (cmd.said) cmd.text = await composeMessage(cmd, target, owner, recipientLanguage(target) || language, isEmail);
+      if (!cmd.text) return asking(say(language, 'What should the message say?', 'شو بدك تقول الرسالة؟'));
       let when = null;
       if (cmd.when) {
         const t = needTime(cmd, language);

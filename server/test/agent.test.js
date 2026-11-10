@@ -552,3 +552,24 @@ test('assistant: fixes what small models get wrong (days, numbers, timing words,
   assert.equal(sent.at(-1), 'OK, cancelled.');
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('assistant: messages are written from the owner\'s instructions, quotes are sent as written', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Hisham', phone: '+963944111222' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  const owner = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  const say = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 300));
+    return sent.at(-1);
+  };
+  let reply = await say('احكي مع +963955123456 قلو كيفك وعرفو عن حالك', { action: 'send_message', to: '+963955123456', text: 'كيفك؟' }, 'w1');
+  assert.match(reply, /Hi, I am the assistant\. كيفك؟/);
+  await say('لا', null, 'w2');
+  reply = await say('send +963955123456 "see you at 5"', { action: 'send_message', to: '+963955123456', text: 'See you at five!' }, 'w3');
+  assert.match(reply, /\n\nsee you at 5\n\n/);
+  await say('no', null, 'w4');
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
