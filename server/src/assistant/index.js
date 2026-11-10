@@ -157,7 +157,8 @@ function systemPrompt(owner, language) {
     '  cancel: cancel a task by its number (#).',
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
-    '  chat: anything else; answer briefly in "reply".',
+    '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
+    '  Any request to tell, message or talk to another person ("احكي مع", "قلو", "قلها", "ابعت لـ", "tell", "message") is send_message, never chat.',
     `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
     `- text: for reminder and schedule, what to remember, short, in ${language}, without "remind me" and without the date or time. For send_message and send_email, a first draft of the message written TO the recipient (carry out the owner's instructions, e.g. "tell him how are you" becomes a greeting asking how they are), WITHOUT the delivery time ("tomorrow at 10" is for "when", not for the message).`,
     '- to: for send_message the person\'s name or the phone number exactly as written in the message (digits and +); for send_email the email address or name. Otherwise null.',
@@ -190,12 +191,19 @@ const REMIND_ME = /^\s*(please\s+)?(remind\s+me\s+(to\s+|about\s+|that\s+)?|ذك
 const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكرة|غدا|غدًا|غداً|اليوم|الأحد|الاحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الاربعاء|الخميس|الجمعة|السبت)|(on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday))?[\s,،]*(الساعة|الساعه|ع\s*الساعة|at)\s*\d{1,2}([:.]\d{2})?\s*(الصبح|الصباح|صباحا|صباحاً|المسا|المساء|مساء|مساءً|العصر|عصرا|الظهر|ظهرا|بالليل|am|pm|a\.m\.|p\.m\.)?[\s.!]*$/i;
 const TIME_LEAD = /^\s*(((on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday)|بكرا|بكره|بكرة|غدا|غداً|اليوم)(?=\s|$))?\s*((at|الساعة|الساعه)\s*\d{1,2}([:.]\d{2})?\s*(am|pm|الصبح|الصباح|المسا|المساء|العصر|الظهر)?)?\s*(to\s+|إنو\s+|انو\s+)?/i;
 const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|ربع\s+ساعة|دقيقة|دقيقتين|\d+\s*(ساعات|ساعة|دقيقة|دقايق|دقائق))|in\s+(an?\s+hour|half\s+an\s+hour|\d+\s*(hours?|minutes?|mins?)))\s*(to\s+)?/i;
+const SPEECH = /(^|\s)(احكي مع|احكي ل|احكيلو|احكيلها|قلو|قله|قلها|قوللو|قول ل|قولي ل|خبر|خبرو|خبرها|بلغ|بلغو|ابعت ل|ابعتلو|ابعتلها|راسل|tell|message|text|let \S+ know)(?=\s|$)/i;
 const PHONE = /\+?\d[\d\s-]{6,}\d/;
 
 // Small models get some things wrong; check them against what the owner actually wrote.
 export function fixCommand(cmd, text, language) {
   const tz = timeZone();
   const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  // "احكي مع X قلو…" / "tell X…" is always a message to someone, even when the model calls it chat.
+  if (['chat', 'help'].includes(cmd.action) && SPEECH.test(text) && !/@/.test(text)) {
+    cmd.action = 'send_message';
+    cmd.text = null;
+    cmd.reply = null;
+  }
   cmd.text = clean(cmd.text);
   cmd.to = clean(cmd.to);
   cmd.when = clean(cmd.when);
