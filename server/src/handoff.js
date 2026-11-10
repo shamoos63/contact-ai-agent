@@ -306,6 +306,13 @@ let whatsappSender = null;
 export function registerWhatsAppSender(fn) {
   whatsappSender = fn;
 }
+// Also used by the owner assistant to send emails and messages.
+export function outboundSenders() {
+  return { email: emailSender, whatsapp: whatsappSender };
+}
+export function teamContacts() {
+  return (handoffSettings().categories || []).flatMap((c) => cleanTeam(c.team));
+}
 
 export async function handOff(conversationId, { category: categoryId = 'sales', reason = 'auto' } = {}) {
   const conv = getConversation(conversationId);

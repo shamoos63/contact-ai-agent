@@ -57,6 +57,15 @@ export const DEFAULTS = {
       },
     ],
   },
+  // Owner assistant: chosen numbers can message the bot to give it tasks.
+  assistant: {
+    enabled: false,
+    timezone: 'Asia/Damascus',
+    confirm_before_sending: true,
+    event_reminder_minutes: 30,
+    daily_briefing: '', // e.g. "09:00": a short summary of the day to every owner
+    owners: [], // { name, phone, telegram, enabled }
+  },
   meta: {
     enabled: false,
     verify_token: '',

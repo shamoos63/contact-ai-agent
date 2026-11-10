@@ -12,6 +12,7 @@ import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
 import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
+import { normalizeAssistant, listTasks, cancelTask } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
 import { logoutWhatsApp } from '../channels/whatsapp.js';
@@ -207,6 +208,7 @@ api.put('/settings', wrap(async (req, res) => {
     if (!(key in body)) continue;
     let value = body[key];
     if (key === 'handoff') value = normalizeHandoff(value);
+    if (key === 'assistant') value = normalizeAssistant(value);
     if (SECRET_FIELDS[key]) {
       value = { ...before[key], ...value };
       for (const f of SECRET_FIELDS[key]) if (value[f] === MASK) value[f] = before[key][f];
@@ -220,6 +222,13 @@ api.put('/settings', wrap(async (req, res) => {
   if (body.voice?.enabled && (body.voice.model !== before.voice.model || !before.voice.enabled)) loadModel().catch(() => {});
   emit('channels', channelStatus());
   res.json(maskedSettings());
+}));
+
+// --- Assistant tasks ---
+api.get('/assistant/tasks', (req, res) => res.json(listTasks({ status: req.query.status })));
+api.post('/assistant/tasks/:id/cancel', wrap(async (req, res) => {
+  cancelTask(Number(req.params.id));
+  res.json({ ok: true });
 }));
 
 // --- AI engine ---

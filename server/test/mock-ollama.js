@@ -12,6 +12,9 @@ function vec(text) {
   return v;
 }
 
+// Answers the tests queue up for the owner assistant, one per request.
+export const assistantAnswers = [];
+
 export function startMockOllama() {
   const calls = [];
   const server = http.createServer(async (req, res) => {
@@ -38,6 +41,10 @@ export function startMockOllama() {
     if (req.url === '/api/chat') {
       await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHAT_DELAY || 0)));
       const system = data.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+      if (system.includes('You are the personal assistant of')) {
+        if (!data.format) return res.end(JSON.stringify({ message: { role: 'assistant', content: 'no schema' } }));
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(assistantAnswers.shift() || { action: 'help' }) } }));
+      }
       if (data.messages[0].content.includes('forwarding rules')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: /invoice/i.test(data.messages[0].content.split('Email:')[1]) ? '1' : 'none' } }));
       }

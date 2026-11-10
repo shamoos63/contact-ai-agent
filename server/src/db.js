@@ -86,6 +86,21 @@ CREATE TABLE IF NOT EXISTS email_rules (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Owner assistant: reminders, appointments and messages/emails to send later.
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,               -- reminder | event | message | email | briefing
+  owner_conversation_id INTEGER REFERENCES conversations(id) ON DELETE SET NULL,
+  owner_name TEXT,
+  run_at TEXT NOT NULL,             -- ISO time (UTC) when it fires
+  payload TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | done | failed | cancelled
+  result TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(status, run_at);
+
 CREATE TABLE IF NOT EXISTS email_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
