@@ -63,3 +63,46 @@ export function localDayBounds(date, timeZone) {
   const next = new Date(start.getTime() + 36 * 3600e3);
   return { start, end: fromLocal(`${toLocal(next, timeZone).slice(0, 10)} 00:00`, timeZone) };
 }
+
+// Day words the model often gets wrong ("الخميس" -> Saturday). Returns { date: 'YYYY-MM-DD', word } for the
+// first day word in the text, or null. A weekday means its next occurrence (today if it is today).
+const DAY_WORDS = [
+  [2, ['after tomorrow', 'بعد بكرا', 'بعد بكره', 'بعد بكرة', 'بعد غد', 'بعد الغد', 'بعد بكير']],
+  [1, ['tomorrow', 'بكرا', 'بكره', 'بكرة', 'غدا', 'غدًا', 'غداً', 'الغد', 'باكر']],
+  [0, ['today', 'tonight', 'اليوم', 'الليلة', 'هالمسا', 'المسا هاد']],
+];
+const WEEKDAYS = [
+  ['sunday', 'الأحد', 'الاحد', 'الحد'],
+  ['monday', 'الاثنين', 'الإثنين', 'الاتنين', 'التنين'],
+  ['tuesday', 'الثلاثاء', 'الثلاثا', 'التلاتا', 'التلاتاء'],
+  ['wednesday', 'الأربعاء', 'الاربعاء', 'الاربعا', 'الأربعا'],
+  ['thursday', 'الخميس'],
+  ['friday', 'الجمعة', 'الجمعه'],
+  ['saturday', 'السبت'],
+];
+
+export function dayFromWords(text, now, timeZone) {
+  const t = ` ${String(text || '').toLowerCase()} `;
+  const today = toLocal(now, timeZone).slice(0, 10);
+  const plusDays = (n) => new Date(Date.parse(`${today}T12:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+  let best = null;
+  const consider = (index, date, word) => {
+    if (index >= 0 && (!best || index < best.index)) best = { index, date, word };
+  };
+  for (const [n, words] of DAY_WORDS) {
+    for (const w of words) {
+      const i = t.indexOf(w);
+      // "بعد بكرا" also contains "بكرا": the longer phrase wins because it starts earlier.
+      if (i >= 0 && !(best && best.index <= i)) consider(i, plusDays(n), w);
+    }
+  }
+  const todayDow = new Date(`${today}T12:00:00Z`).getUTCDay();
+  WEEKDAYS.forEach((names, dow) => {
+    for (const w of names) {
+      const re = new RegExp(`(^|[^\\p{L}])${w}(?=$|[^\\p{L}])`, 'u');
+      const m = t.match(re);
+      if (m) consider(m.index + m[1].length, plusDays((dow - todayDow + 7) % 7), w);
+    }
+  });
+  return best && { date: best.date, word: best.word };
+}

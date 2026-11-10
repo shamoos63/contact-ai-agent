@@ -512,3 +512,89 @@ test('assistant: owners give tasks, reminders fire, messages go out only after "
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
   assert.equal(assistant.isOwnerConversation(mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === owner.externalId).id), false);
 });
+
+test('assistant: fixes what small models get wrong (days, numbers, timing words, language)', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const { dayFromWords, toLocal } = await import('../src/assistant/time.js');
+  const now = new Date('2026-11-10T08:00:00Z'); // Tuesday in Damascus
+  assert.equal(dayFromWords('عندي اجتماع مع سامي يوم الخميس الساعة 4', now, 'Asia/Damascus').date, '2026-11-12');
+  assert.equal(dayFromWords('بعد بكرا الساعة 5', now, 'Asia/Damascus').date, '2026-11-12');
+  assert.equal(dayFromWords('remind me tomorrow at 9', now, 'Asia/Damascus').date, '2026-11-11');
+  assert.equal(dayFromWords('ذكرني بعد ساعتين', now, 'Asia/Damascus'), null);
+
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'H', phone: '+963944111222' }] }));
+  const today = toLocal(new Date(), 'Asia/Damascus').slice(0, 10);
+  const thursday = dayFromWords('الخميس', new Date(), 'Asia/Damascus').date;
+  let c = assistant.fixCommand({ action: 'schedule', when: '2030-01-05 16:00', text: 'لدي اجتماع مع سامي' }, 'عندي اجتماع مع سامي يوم الخميس الساعة 4 العصر', 'Arabic');
+  assert.equal(c.when, `${thursday} 16:00`);
+  c = assistant.fixCommand({ action: 'reminder', when: `${today} 23:00`, text: 'تذكرني في الساعة التاسعة صباحاً明天叫我' }, 'remind me tomorrow at 9 to call Ahmad', 'English');
+  assert.equal(c.text, 'call Ahmad');
+  c = assistant.fixCommand({ action: 'reminder', when: `${today} 23:00`, text: 'تذكرني بعد ساعتين اتصل بالمورد' }, 'ذكرني بعد ساعتين اتصل بالمورد', 'Arabic');
+  assert.equal(c.text, 'اتصل بالمورد');
+  c = assistant.fixCommand({ action: 'reminder', when: `${today} 23:00`, text: "Today's report" }, "remind me about today's report", 'English');
+  assert.equal(c.text, "Today's report");
+  c = assistant.fixCommand({ action: 'send_message', when: `${today} 23:00`, to: null, text: 'الطلب رح يتأخر يوم، بكرا الساعة 10 الصبح' }, 'ابعت لـ +971501234567 إنو الطلب رح يتأخر يوم، بكرا الساعة 10 الصبح', 'Arabic');
+  assert.equal(c.to, '+971501234567');
+  assert.equal(c.text, 'الطلب رح يتأخر يوم');
+  c = assistant.fixCommand({ action: 'send_email', to: 'Sami', text: 'Price list attached' }, 'email sami@company.com the price list', 'English');
+  assert.equal(c.to, 'sami@company.com');
+
+  // "no" to the bot's question cancels instead of starting the request again.
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  const owner = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  assistantAnswers.push({ action: 'send_message', to: 'Nobody Known', text: 'Hi' });
+  mods.inbox.handleIncoming({ ...owner, text: 'tell Nobody Known hi', messageId: 'q1' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.match(sent.at(-1), /couldn't find/);
+  mods.inbox.handleIncoming({ ...owner, text: 'no', messageId: 'q2' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(sent.at(-1), 'OK, cancelled.');
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('assistant: messages are written from the owner\'s instructions, quotes are sent as written', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Hisham', phone: '+963944111222' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  const owner = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  const say = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 300));
+    return sent.at(-1);
+  };
+  let reply = await say('احكي مع +963955123456 قلو كيفك وعرفو عن حالك', { action: 'send_message', to: '+963955123456', text: 'كيفك؟' }, 'w1');
+  assert.match(reply, /Hi, I am the assistant\. كيفك؟/);
+  await say('لا', null, 'w2');
+  reply = await say('send +963955123456 "see you at 5"', { action: 'send_message', to: '+963955123456', text: 'See you at five!' }, 'w3');
+  assert.match(reply, /\n\nsee you at 5\n\n/);
+  await say('no', null, 'w4');
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('assistant: made-up numbers are ignored, Arabic names find Latin contacts, drafts lose instruction words', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Hisham', phone: '+963944111222' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971507771111@s.whatsapp.net', name: 'Mohammad Saleh', handle: '+971507771111', meta: { phone: '+971507771111' } });
+  const owner = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  const say = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 300));
+    return sent.filter((m) => m.to === owner.externalId).at(-1).text;
+  };
+  // The model invents a number for a name: the name is used instead, and "محمد" finds "Mohammad Saleh".
+  let reply = await say('احكي مع محمد قلو الطلب جاهز', { action: 'send_message', to: '+963555555555', text: 'قلو لـ +971507771111 إنو الطلب جاهز' }, 'm1');
+  assert.match(reply, /Mohammad Saleh \(\+971507771111\)/);
+  assert.doesNotMatch(reply, /555555/);
+  assert.doesNotMatch(reply.split('\n\n')[1], /قلو|971507771111/);
+  await say('لا', null, 'm2');
+  reply = await say('احكي مع منى قلو كيفك', { action: 'send_message', to: 'منى', text: 'كيفك' }, 'm3');
+  assert.match(reply, /Mona Client/);
+  await say('لا', null, 'm4');
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

@@ -41,6 +41,11 @@ export function startMockOllama() {
     if (req.url === '/api/chat') {
       await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHAT_DELAY || 0)));
       const system = data.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+      if (system.includes('AI assistant.') && system.includes('on behalf of')) {
+        const draft = system.match(/^Draft: (.*)$/m)?.[1] || '';
+        const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
+      }
       if (system.includes('You are the personal assistant of')) {
         if (!data.format) return res.end(JSON.stringify({ message: { role: 'assistant', content: 'no schema' } }));
         return res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(assistantAnswers.shift() || { action: 'help' }) } }));

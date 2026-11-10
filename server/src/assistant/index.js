@@ -5,7 +5,7 @@ import { detectLanguage } from '../ai/agent.js';
 import { getConversation, sendMessage, updateMeta, ensureConversation } from '../inbox.js';
 import { outboundSenders, teamContacts } from '../handoff.js';
 import { emit } from '../realtime.js';
-import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone } from './time.js';
+import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
 
 // The owner assistant: numbers chosen under "Assistant" can message the bot (text or voice) to give
 // it tasks: reminders, appointments, messages to clients and emails, now or later. Anything that
@@ -72,6 +72,8 @@ export function normalizeAssistant(value) {
 }
 
 const say = (language, en, ar) => (language === 'Arabic' ? ar : en);
+// A question back to the owner. While it is open, "no" cancels instead of starting something new.
+const asking = (text) => ({ ask: text });
 
 // --- Tasks ---
 function insertTask({ kind, conv, owner, runAt, payload }) {
@@ -129,6 +131,17 @@ const SCHEMA = {
   required: ['action'],
 };
 
+// The next seven days, so the model doesn't have to work out which date "Thursday" is.
+function calendar() {
+  const tz = timeZone();
+  const today = toLocal(new Date(), tz).slice(0, 10);
+  return Array.from({ length: 8 }, (_, n) => {
+    const d = new Date(Date.parse(`${today}T12:00:00Z`) + n * 86400e3);
+    const name = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+    return `${name} ${d.toISOString().slice(0, 10)}${n === 0 ? ' (today)' : n === 1 ? ' (tomorrow)' : ''}`;
+  }).join(', ');
+}
+
 function systemPrompt(owner, language) {
   const tz = timeZone();
   return [
@@ -145,17 +158,17 @@ function systemPrompt(owner, language) {
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
     '  chat: anything else; answer briefly in "reply".',
-    '- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Work out words like tomorrow, Thursday, بكرا, بعد ساعة, الأحد. If only a day is given for a reminder, use 09:00.',
-    '- text: the reminder text, the appointment title, or the exact message or email body to send. Write a message to a recipient as addressed to them, in the language the owner wants it in.',
-    '- to: for send_message the person\'s name or phone number exactly as the owner gave it; for send_email the email address or name. Otherwise null.',
+    `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
+    `- text: for reminder and schedule, what to remember, short, in ${language}, without "remind me" and without the date or time. For send_message and send_email, a first draft of the message written TO the recipient (carry out the owner's instructions, e.g. "tell him how are you" becomes a greeting asking how they are), WITHOUT the delivery time ("tomorrow at 10" is for "when", not for the message).`,
+    '- to: for send_message the person\'s name or the phone number exactly as written in the message (digits and +); for send_email the email address or name. Otherwise null.',
     '- subject: the email subject, or null.',
     '- task_id: for cancel, the task number. Otherwise null.',
     `- reply: for help or chat, a short answer in ${language}. Otherwise "".`,
-    'Answer with the JSON object only.',
+    'Write only Arabic or English, never Chinese. Answer with the JSON object only.',
   ].join('\n');
 }
 
-async function understand(conv, owner, language) {
+async function understand(conv, owner, language, text) {
   const history = db
     .prepare("SELECT direction, text FROM messages WHERE conversation_id = ? AND direction <> 'note' AND error IS NULL ORDER BY id DESC LIMIT 5")
     .all(conv.id)
@@ -169,7 +182,101 @@ async function understand(conv, owner, language) {
     return { action: 'help' };
   }
   if (!ACTIONS.includes(cmd.action)) cmd.action = 'chat';
+  return fixCommand(cmd, text, language);
+}
+
+const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
+const REMIND_ME = /^\s*(please\s+)?(remind\s+me\s+(to\s+|about\s+|that\s+)?|ذكر(ني|نى)\s*|تذكر(ني|نى)\s*|فكرني\s*)/i;
+const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكرة|غدا|غدًا|غداً|اليوم|الأحد|الاحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الاربعاء|الخميس|الجمعة|السبت)|(on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday))?[\s,،]*(الساعة|الساعه|ع\s*الساعة|at)\s*\d{1,2}([:.]\d{2})?\s*(الصبح|الصباح|صباحا|صباحاً|المسا|المساء|مساء|مساءً|العصر|عصرا|الظهر|ظهرا|بالليل|am|pm|a\.m\.|p\.m\.)?[\s.!]*$/i;
+const TIME_LEAD = /^\s*(((on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday)|بكرا|بكره|بكرة|غدا|غداً|اليوم)(?=\s|$))?\s*((at|الساعة|الساعه)\s*\d{1,2}([:.]\d{2})?\s*(am|pm|الصبح|الصباح|المسا|المساء|العصر|الظهر)?)?\s*(to\s+|إنو\s+|انو\s+)?/i;
+const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|ربع\s+ساعة|دقيقة|دقيقتين|\d+\s*(ساعات|ساعة|دقيقة|دقايق|دقائق))|in\s+(an?\s+hour|half\s+an\s+hour|\d+\s*(hours?|minutes?|mins?)))\s*(to\s+)?/i;
+const PHONE = /\+?\d[\d\s-]{6,}\d/;
+
+// Small models get some things wrong; check them against what the owner actually wrote.
+export function fixCommand(cmd, text, language) {
+  const tz = timeZone();
+  const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  cmd.text = clean(cmd.text);
+  cmd.to = clean(cmd.to);
+  cmd.when = clean(cmd.when);
+
+  // The date of "Thursday" / "بكرا" comes from the words, not from the model's arithmetic.
+  const day = dayFromWords(text, new Date(), tz);
+  if (cmd.when && day && !(cmd.text || '').toLowerCase().includes(day.word) && /^\d{4}-\d{2}-\d{2}/.test(cmd.when)) {
+    cmd.when = day.date + cmd.when.slice(10);
+  }
+  if (!cmd.when && day && ['reminder', 'schedule', 'list'].includes(cmd.action)) cmd.when = cmd.action === 'list' ? day.date : null;
+
+  if (cmd.action === 'reminder' || cmd.action === 'schedule') {
+    // Chinese, or Arabic for an owner who wrote in English: use the owner's own words instead.
+    if (cmd.text && (CJK.test(cmd.text) || (language === 'English' && /[\u0600-\u06FF]/.test(cmd.text)))) cmd.text = null;
+    if (!cmd.text) cmd.text = text.replace(REMIND_ME, '').replace(TIME_LEAD, '').trim() || null;
+    if (cmd.text) cmd.text = cmd.text.replace(REMIND_ME, '').replace(RELATIVE, '').replace(TIME_LEAD, '').replace(TIME_PHRASE, '').trim() || cmd.text;
+  }
+  if (cmd.action === 'send_message' || cmd.action === 'send_email') {
+    if (cmd.text && CJK.test(cmd.text)) cmd.text = null;
+    if (cmd.text && cmd.when) cmd.text = cmd.text.replace(TIME_PHRASE, '').trim() || cmd.text;
+    // Models sometimes make up a number. Only numbers the owner actually wrote are used.
+    const written = digitsOf(text);
+    if (cmd.to && digitsOf(cmd.to).length >= 7 && !written.includes(digitsOf(cmd.to).slice(-7))) {
+      cmd.to = cmd.to.replace(/\+?\d[\d\s-]{5,}\d/g, '').replace(/[()]/g, '').trim() || null;
+    }
+    if (cmd.action === 'send_message' && !(cmd.to && digitsOf(cmd.to).length >= 7)) {
+      const phone = text.match(PHONE)?.[0];
+      if (phone && digitsOf(phone).length >= 7) cmd.to = phone;
+    }
+    if (cmd.action === 'send_email' && !(cmd.to && cmd.to.includes('@'))) {
+      const address = text.match(/[^\s<>"'،,]+@[^\s<>"'،,]+\.[a-z]{2,}/i)?.[0];
+      if (address) cmd.to = address;
+    }
+  }
+  if (cmd.reply && CJK.test(cmd.reply)) cmd.reply = null;
+  cmd.said = text;
   return cmd;
+}
+
+// Remove instruction words and numbers a small model copied into the message.
+function cleanDraft(text, target) {
+  let out = text;
+  const digits = digitsOf(target.phone || target.label || '');
+  if (digits.length >= 7) out = out.replace(/\s*(لـ|ل|to)?\s*\+?\d[\d\s-]{5,}\d/g, (m) => (digitsOf(m).slice(-7) === digits.slice(-7) ? '' : m));
+  out = out.replace(/(^|[\s،,.])(قل(و|ه|ها|لو|ي)|احكي مع|ابعت(ل|لـ)?|tell (him|her|them))(?=[\s،,.]|$)\s*(لـ|ل)?\s*(إنو|انو|إنه|أنه|أن|that)?/gi, '$1');
+  return out.replace(/\s{2,}/g, ' ').replace(/\s+([،,.!؟?])/g, '$1').trim();
+}
+
+// The language the recipient wrote to us in, if they have.
+function recipientLanguage(target) {
+  if (!target.conversationId) return null;
+  const last = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 3").all(target.conversationId);
+  return last.length ? detectLanguage([{ role: 'user', content: last.map((m) => m.text).join('\n') }]) : null;
+}
+
+// Turn the owner's instruction ("tell him how are you and introduce yourself") into the message the
+// recipient actually reads, written by the assistant on the owner's behalf.
+async function composeMessage(cmd, target, owner, language, isEmail) {
+  const company = getSetting('company_name');
+  const who = owner.name || 'the owner';
+  const recipient = String(target.label || '').replace(/\s*[(<].*$/, '').trim();
+  const system = [
+    `You write ${isEmail ? 'emails' : 'WhatsApp messages'} on behalf of ${who} at ${company}. You are ${who}'s AI assistant.`,
+    `${who} asked you: «${cmd.said}»`,
+    cmd.text ? `Draft: ${cmd.text}` : '',
+    `Write the ${isEmail ? 'email body' : 'message'} that ${recipient && !/^\+?\d/.test(recipient) ? recipient : 'the recipient'} will read. Do what ${who} meant, not their exact words:`,
+    `- "tell him / قلو / قلها X" means say X to the recipient directly, in your own words.`,
+    `- "introduce yourself / عرفو عن حالك" means say you are ${who}'s assistant${company && company !== 'Our Company' ? ` at ${company}` : ''}.`,
+    `- Never copy the instruction words (tell him, قلو, قلها, احكي مع, ابعت لـ, إنو) or any phone number into the message.`,
+    '- Greet them naturally. Keep it short, warm and polite.',
+    `- Write in ${language}${language === 'Arabic' ? ', in the same dialect the owner used' : ''}, unless ${who} asked for another language. Never use Chinese.`,
+    '- Do not mention when it will be sent, do not add a signature line with placeholders, and do not invent facts, prices or promises.',
+    'Answer with the message text only.',
+  ].filter(Boolean).join('\n');
+  try {
+    const out = (await chat([{ role: 'system', content: system }, { role: 'user', content: 'Write it now.' }], { temperature: 0.3 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
+    if (out && !CJK.test(out)) return cleanDraft(out, target);
+  } catch (err) {
+    console.error('[assistant] Writing the message failed:', err.message);
+  }
+  return cmd.text;
 }
 
 // --- Finding who to send to ---
@@ -187,8 +294,50 @@ function phoneOf(conv) {
   return null;
 }
 
-function resolveRecipient(to, language) {
-  const wanted = String(to || '').trim();
+// A rough consonant skeleton, so "منى" matches "Mona" and "محمد" matches "Mohammad".
+const AR = { ب: 'b', ت: 't', ث: 't', ج: 'j', ح: 'h', خ: 'k', د: 'd', ذ: 'z', ر: 'r', ز: 'z', س: 's', ش: 'x', ص: 's', ض: 'd', ط: 't', ظ: 'z', غ: 'g', ف: 'f', ق: 'k', ك: 'k', ل: 'l', م: 'm', ن: 'n', ه: 'h' };
+function skeleton(word) {
+  let w = String(word || '').toLowerCase();
+  if (/[\u0600-\u06FF]/.test(w)) {
+    w = [...w.replace(/^ال(?=..)/, '').replace(/[هة]$/, '')].map((ch) => AR[ch] || '').join('');
+  } else {
+    w = w.replace(/^al-?(?=..)/, '').replace(/(sh|ch)/g, 'x').replace(/kh/g, 'k').replace(/gh/g, 'g').replace(/th/g, 't').replace(/dh/g, 'z').replace(/ph/g, 'f')
+      .replace(/h$/, '').replace(/[^a-z]/g, '').replace(/[aeiouwy]/g, '').replace(/[cq]/g, 'k').replace(/g/g, 'j').replace(/v/g, 'f').replace(/p/g, 'b');
+  }
+  return w.replace(/(.)\1+/g, '$1');
+}
+const nameWords = (name) => String(name || '').split(/[\s.,،_-]+/).filter((w) => w.length >= 2);
+function nameMatches(contactName, wanted) {
+  const a = String(contactName || '').toLowerCase();
+  const b = String(wanted || '').toLowerCase().trim();
+  if (!a || !b) return false;
+  if (a.includes(b)) return true;
+  const want = nameWords(b).map(skeleton).filter((k) => k.length >= 2);
+  const have = nameWords(a).map(skeleton);
+  return want.length > 0 && want.every((k) => have.includes(k));
+}
+
+function contactList() {
+  const owners = new Set(ownerConversationIds());
+  return db
+    .prepare("SELECT * FROM conversations WHERE channel IN ('whatsapp', 'telegram') AND (contact_name IS NOT NULL OR contact_handle IS NOT NULL) ORDER BY last_message_at DESC LIMIT 1000")
+    .all()
+    .filter((c) => !owners.has(c.id))
+    .map((c) => {
+      const meta = JSON.parse(c.meta || '{}');
+      const where = c.channel === 'whatsapp' ? phoneOf({ ...c, meta }) || 'WhatsApp' : `Telegram ${c.contact_handle || ''}`.trim();
+      return { conversationId: c.id, name: c.contact_name || c.contact_handle, handle: c.contact_handle, label: `${c.contact_name || c.contact_handle} (${where})` };
+    });
+}
+
+function resolveRecipient(to, language, said = '') {
+  let wanted = String(to || '').trim();
+  // No name from the model: look for a known contact's name in what the owner wrote.
+  if (!wanted && said) {
+    const words = nameWords(said);
+    const hits = contactList().filter((c) => c.name && nameWords(c.name).some((n) => words.some((w) => n.length >= 3 && skeleton(n).length >= 2 && (w.toLowerCase() === n.toLowerCase() || skeleton(w) === skeleton(n)))));
+    if (hits.length === 1) return hits[0];
+  }
   if (!wanted) return { ask: say(language, 'Who should I send it to? Send me their name or number.', 'لمين بدك ابعتها؟ ابعتلي الاسم أو الرقم.') };
   const digits = digitsOf(wanted);
   if (digits.length >= 7) {
@@ -199,19 +348,9 @@ function resolveRecipient(to, language) {
       ? { conversationId: conv.id, label: `${conv.contact_name || phoneOf(conv)} (${phoneOf(conv)})` }
       : { phone: '+' + digits, label: '+' + digits };
   }
-  const owners = new Set(ownerConversationIds());
-  const like = `%${wanted}%`;
-  const found = db
-    .prepare("SELECT * FROM conversations WHERE channel IN ('whatsapp', 'telegram') AND (contact_name LIKE ? OR contact_handle LIKE ?) ORDER BY last_message_at DESC LIMIT 10")
-    .all(like, like)
-    .filter((c) => !owners.has(c.id))
-    .map((c) => {
-      const meta = JSON.parse(c.meta || '{}');
-      const where = c.channel === 'whatsapp' ? phoneOf({ ...c, meta }) || 'WhatsApp' : `Telegram ${c.contact_handle || ''}`.trim();
-      return { conversationId: c.id, label: `${c.contact_name || c.contact_handle} (${where})` };
-    });
+  const found = contactList().filter((c) => nameMatches(c.name, wanted) || String(c.handle || '').toLowerCase().includes(wanted.toLowerCase())).slice(0, 10);
   const team = teamContacts()
-    .filter((m) => m.phone && m.name && m.name.toLowerCase().includes(wanted.toLowerCase()))
+    .filter((m) => m.phone && m.name && nameMatches(m.name, wanted))
     .map((m) => ({ phone: m.phone, label: `${m.name} (${m.phone})` }));
   const all = [...found, ...team.filter((t) => !found.some((f) => f.label.includes(digitsOf(t.phone).slice(-9))))];
   if (all.length === 1) return all[0];
@@ -319,14 +458,14 @@ async function act(cmd, conv, owner, language) {
   switch (cmd.action) {
     case 'reminder': {
       const t = needTime(cmd, language);
-      if (t.ask) return t.ask;
+      if (t.ask) return asking(t.ask);
       const text = cmd.text || say(language, 'Reminder', 'تذكير');
       const id = insertTask({ kind: 'reminder', conv, owner, runAt: t.when, payload: { text, language } });
       return say(language, `⏰ Reminder #${id} set for ${pretty(t.when, tz, language)}: ${text}`, `⏰ تم ضبط التذكير #${id} بتاريخ ${pretty(t.when, tz, language)}: ${text}`);
     }
     case 'schedule': {
       const t = needTime(cmd, language);
-      if (t.ask) return t.ask;
+      if (t.ask) return asking(t.ask);
       const title = cmd.text || say(language, 'Appointment', 'موعد');
       const before = s.event_reminder_minutes ?? 30;
       const remindAt = new Date(Math.max(Date.now(), t.when.getTime() - before * 60e3));
@@ -338,13 +477,17 @@ async function act(cmd, conv, owner, language) {
     case 'send_message':
     case 'send_email': {
       const isEmail = cmd.action === 'send_email';
-      if (!cmd.text) return say(language, 'What should the message say?', 'شو بدك تقول الرسالة؟');
-      const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language);
-      if (target.ask) return target.ask;
+      const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language, cmd.said);
+      if (target.ask) return asking(target.ask);
+      // Words in quotes ("…", «…») are sent as written; anything else is an instruction the assistant carries out.
+      const quoted = String(cmd.said || '').match(/["“«]([^"”»]{2,})["”»]/)?.[1]?.trim();
+      if (quoted || /بالحرف|word for word|exactly/i.test(cmd.said || '')) cmd.text = quoted || cmd.text;
+      else if (cmd.said) cmd.text = await composeMessage(cmd, target, owner, recipientLanguage(target) || language, isEmail);
+      if (!cmd.text) return asking(say(language, 'What should the message say?', 'شو بدك تقول الرسالة؟'));
       let when = null;
       if (cmd.when) {
         const t = needTime(cmd, language);
-        if (t.ask) return t.ask;
+        if (t.ask) return asking(t.ask);
         when = t.when.toISOString();
       }
       const action = {
@@ -380,7 +523,7 @@ async function act(cmd, conv, owner, language) {
     case 'cancel': {
       const id = Number(cmd.task_id || String(cmd.text || '').match(/\d+/)?.[0]);
       const t = id && db.prepare("SELECT * FROM tasks WHERE id = ? AND status = 'pending' AND (owner_conversation_id = ? OR owner_conversation_id IS NULL)").get(id, conv.id);
-      if (!t) return say(language, 'Which task number? Send "list" to see them.', 'أي رقم مهمة؟ ابعت "شو عندي" لتشوفهم.');
+      if (!t) return asking(say(language, 'Which task number? Send "list" to see them.', 'أي رقم مهمة؟ ابعت "شو عندي" لتشوفهم.'));
       finishTask(id, 'cancelled', `Cancelled by ${owner.name || 'owner'}`);
       return say(language, `🗑️ Cancelled #${id}.`, `🗑️ انلغت #${id}.`);
     }
@@ -427,9 +570,20 @@ async function processOwnerMessage(conversationId) {
         return await reply(say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
     }
-    if (pending) updateMeta(conversationId, { assistantPending: null });
-    const cmd = await understand(conv, owner, language);
-    await reply(await act(cmd, getConversation(conversationId), owner, language));
+    const asked = conv.meta.assistantAsked;
+    if (asked && Date.now() - asked < CONFIRM_MINUTES * 60e3 && NO.has(firstWord(text))) {
+      updateMeta(conversationId, { assistantPending: null, assistantAsked: null });
+      return await reply(say(language, 'OK, cancelled.', 'تمام، انلغى.'));
+    }
+    if (pending || asked) updateMeta(conversationId, { assistantPending: null, assistantAsked: null });
+    const cmd = await understand(conv, owner, language, text);
+    const out = await act(cmd, getConversation(conversationId), owner, language);
+    if (out?.ask) {
+      updateMeta(conversationId, { assistantAsked: Date.now() });
+      await reply(out.ask);
+    } else {
+      await reply(out);
+    }
   } catch (err) {
     console.error('[assistant] Failed:', err);
     await reply(say(language, `⚠️ Something went wrong: ${err.message}`, `⚠️ صار خطأ: ${err.message}`));
