@@ -12,6 +12,7 @@ Everything runs on your own computer with free, local AI ([Ollama](https://ollam
 | **Knowledge base** | Upload PDF / Word / text files, add web pages, or type notes. The AI answers only from this. A "Try it" box lets you test answers. |
 | **Redirects** | Rules like "when the customer wants to buy → send +971…" or "→ send https://…". |
 | **Team handoff** | Topics you define (sales, maintenance, software…): the AI asks for the details, then sends the customer's number and a short brief to that topic's team on WhatsApp. |
+| **Assistant** | Chosen numbers (yours, a manager's) message the bot to give it tasks: reminders, appointments, messages to clients and emails, now or later, plus a daily summary. |
 | **Voice notes** | WhatsApp/Telegram voice notes are transcribed locally (Whisper) so the AI can answer them. |
 | **Email forwarding** | Forward matching emails (by keywords or by AI) to team members, with attachments. |
 | **Channels** | WhatsApp (QR scan, like WhatsApp Web), Telegram bot, any number of email accounts (Gmail or your domain, IMAP/SMTP), Facebook + Instagram (official Meta API). |
@@ -128,6 +129,17 @@ The conversation then goes like this:
 3. That topic's team gets a WhatsApp message with the topic, the customer's name, a tap-to-chat link (`wa.me` or `t.me`) and a short summary of what they need.
 
 One chat can go to several teams (a customer buying a phone and asking for a repair reaches both). The customer is never given a team's own number: while handoff is on, redirect rules about a topic or pointing at a team number are not used. The same customer isn't sent twice for the same topic within 24 hours (adjustable). The **Send to team…** menu in the inbox does it by hand for any chat. Requests are sent from your connected WhatsApp number, and the AI never answers messages coming from team numbers. If you used the older Settings → Sales handoff, your sales people are carried over to the Sales topic.
+
+### Assistant (tasks by chat)
+Under **Assistant**, turn it on, pick your time zone and add the people who may give the bot tasks (name, the WhatsApp number they write from, and/or their Telegram username). Messages from these people never get customer answers. Instead, in Arabic or English, by text or voice note, they can say things like:
+
+- "Remind me tomorrow at 9 to call Ahmad" / "ذكرني بكرا الساعة 9 اتصل بأحمد": a reminder message at that time.
+- "I have a meeting with Sami on Thursday at 4": saved as an appointment, with a reminder before it (30 minutes by default).
+- "Tell Mona her order is ready" or "Send +971 50 123 4567 'we're open until 8' at 5pm": a WhatsApp message to a client, found by name among your chats and team people, or by number. Now or at a set time.
+- "Email sami@company.com the new price list: …": sent from your first email account.
+- "What do I have tomorrow?", "Cancel #12", "Summary of today".
+
+Messages and emails to other people are shown first and only go out after the owner replies **yes** (or **نعم / تمام / ابعت**); **no** cancels. You can turn this check off. An optional **daily summary** time sends each owner today's numbers (new chats, customer messages, requests passed to the team) and what's scheduled. Everything waiting shows in the **Coming up** list on the page, where it can be cancelled. Times are understood in the time zone you pick, so the server running in UTC doesn't matter. If the computer was off when something was due, it is sent as soon as the app is back, marked late.
 
 ### Email forwarding rules
 Under **Email forwarding** you decide which emails go to which people, for example invoices to accounting and CVs to HR. A rule matches either by **keywords** (instant, e.g. `invoice, payment, فاتورة`) or by a description the **AI** understands (e.g. "job applications and CVs"). Matching emails are forwarded with their attachments from the same mailbox, with Reply-To set to the customer so your colleague can answer them directly. Per rule you choose whether the AI still replies to the customer or leaves it to the team. Each forward shows as a note in the conversation, and **Try a sample email** shows which rules would fire.

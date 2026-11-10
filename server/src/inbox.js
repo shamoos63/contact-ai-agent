@@ -3,6 +3,7 @@ import { emit } from './realtime.js';
 import { getSetting } from './settings.js';
 import { generateReply } from './ai/agent.js';
 import { afterReply } from './handoff.js';
+import { isOwnerConversation, handleOwnerMessage } from './assistant/index.js';
 
 const senders = new Map(); // channel -> async (conversation, text) => { externalId? }
 
@@ -18,6 +19,10 @@ function conversationRow(id) {
 
 export function getConversation(id) {
   return conversationRow(id);
+}
+
+export function ensureConversation(fields) {
+  return upsertConversation(fields);
 }
 
 function upsertConversation({ channel, accountId = '', externalId, name, handle, subject, meta }) {
@@ -69,6 +74,11 @@ export function handleIncoming({ channel, accountId, externalId, name, handle, s
 
   const conversationId = upsertConversation({ channel, accountId, externalId, name, handle, subject, meta: convMeta });
   insertMessage({ conversationId, direction: 'in', sender: 'customer', text: text.trim(), externalId: messageId, meta });
+  // Numbers chosen under Assistant give the bot tasks instead of getting customer answers.
+  if ((channel === 'whatsapp' || channel === 'telegram') && !meta?.transcribeError && isOwnerConversation(conversationId)) {
+    handleOwnerMessage(conversationId).catch(() => {});
+    return conversationId;
+  }
   if (autoReply) scheduleAutoReply(conversationId);
   return conversationId;
 }

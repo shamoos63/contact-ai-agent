@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startMockOllama } from './mock-ollama.js';
+import { startMockOllama, assistantAnswers } from './mock-ollama.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cai-test-'));
 process.env.DATA_DIR = dataDir;
@@ -405,4 +405,110 @@ test('handoff: topics get ids, and the old sales setting carries over', async ()
   assert.equal(sales.team[0].name, 'Rami');
   assert.deepEqual(handoff.activeCategories().map((c) => c.id), ['sales']);
   mods.settings.setSetting('handoff', { enabled: false, categories: [] });
+});
+
+test('assistant: time helpers turn local times into UTC', async () => {
+  const t = await import('../src/assistant/time.js');
+  assert.equal(t.fromLocal('2026-11-11 09:00', 'Asia/Damascus').toISOString(), '2026-11-11T06:00:00.000Z');
+  assert.equal(t.fromLocal('2026-07-01 09:00', 'Europe/Berlin').toISOString(), '2026-07-01T07:00:00.000Z');
+  assert.equal(t.fromLocal('2026-12-01 09:00', 'Europe/Berlin').toISOString(), '2026-12-01T08:00:00.000Z');
+  assert.equal(t.toLocal(new Date('2026-11-10T21:30:00Z'), 'Asia/Damascus'), '2026-11-11 00:30');
+  const { start, end } = t.localDayBounds(new Date('2026-11-10T22:00:00Z'), 'Asia/Damascus');
+  assert.equal(start.toISOString(), '2026-11-10T21:00:00.000Z');
+  assert.equal(end.toISOString(), '2026-11-11T21:00:00.000Z');
+});
+
+test('assistant: owners give tasks, reminders fire, messages go out only after "yes"', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const { toLocal } = await import('../src/assistant/time.js');
+  mods.settings.setSetting('handoff', { enabled: false, categories: [] });
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({
+    enabled: true, timezone: 'Asia/Damascus', confirm_before_sending: true, event_reminder_minutes: 30,
+    owners: [{ name: 'Hisham', phone: '+963 944 111 222' }, { name: '', phone: '', telegram: '' }],
+  }));
+  assert.equal(mods.settings.getSetting('assistant').owners.length, 1);
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const wait = () => new Promise((r) => setTimeout(r, 300));
+  const owner = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', name: 'Hisham', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  const ownerSays = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    sent.length = 0;
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await wait();
+    return sent.filter((m) => m.to === owner.externalId).map((m) => m.text);
+  };
+
+  // A client who has written before, so the owner can name her.
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const clientId = mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971507770000@s.whatsapp.net', name: 'Mona Client', handle: '+971507770000', meta: { phone: '+971507770000' } });
+
+  // 1. A reminder for tomorrow 09:00 local time is stored in UTC.
+  const tomorrow = toLocal(new Date(Date.now() + 86400e3), 'Asia/Damascus').slice(0, 10);
+  let replies = await ownerSays('remind me tomorrow at 9 to call Ahmad', { action: 'reminder', when: `${tomorrow} 09:00`, text: 'Call Ahmad' }, 'o1');
+  assert.match(replies[0], /Reminder #\d+ set for .*09:00: Call Ahmad/);
+  const reminder = mods.db.prepare("SELECT * FROM tasks WHERE kind = 'reminder' ORDER BY id DESC").get();
+  assert.equal(reminder.run_at, new Date(`${tomorrow}T06:00:00Z`).toISOString());
+
+  // It fires when due, and only once.
+  sent.length = 0;
+  await assistant.runDueTasks(new Date(new Date(reminder.run_at).getTime() + 1000));
+  await assistant.runDueTasks(new Date(new Date(reminder.run_at).getTime() + 2000));
+  assert.deepEqual(sent, [{ to: owner.externalId, text: '⏰ Reminder: Call Ahmad' }]);
+  assert.equal(mods.db.prepare('SELECT status FROM tasks WHERE id = ?').get(reminder.id).status, 'done');
+
+  // 2. A message to a client is shown first and sent only after "yes".
+  replies = await ownerSays('tell Mona her order is ready', { action: 'send_message', to: 'Mona', text: 'Hi Mona, your order is ready.' }, 'o2');
+  assert.match(replies[0], /WhatsApp to Mona Client \(\+971507770000\) now/);
+  assert.match(replies[0], /Reply "yes"/);
+  assert.equal(sent.filter((m) => m.to !== owner.externalId).length, 0);
+  replies = await ownerSays('yes', null, 'o3');
+  assert.deepEqual(sent.find((m) => m.to !== owner.externalId), { to: '971507770000@s.whatsapp.net', text: 'Hi Mona, your order is ready.' });
+  assert.match(replies[0], /Sent to Mona Client/);
+  assert.equal(mods.inbox.listMessages(clientId).at(-1).text, 'Hi Mona, your order is ready.');
+
+  // "no" cancels; a new number gets a new conversation, at a later time.
+  await ownerSays('send +963 955 000 111 "see you tomorrow"', { action: 'send_message', to: '+963 955 000 111', text: 'See you tomorrow' }, 'o4');
+  replies = await ownerSays('لا', null, 'o5');
+  assert.match(replies[0], /ما انبعتت/);
+  assert.equal(sent.length, 1);
+  const later = toLocal(new Date(Date.now() + 2 * 3600e3), 'Asia/Damascus');
+  await ownerSays('send +963 955 000 111 at ' + later, { action: 'send_message', to: '+963 955 000 111', text: 'See you tomorrow', when: later }, 'o6');
+  replies = await ownerSays('ok', null, 'o7');
+  assert.match(replies[0], /Scheduled #\d+/);
+  const scheduled = mods.db.prepare("SELECT * FROM tasks WHERE kind = 'message' ORDER BY id DESC").get();
+  sent.length = 0;
+  await assistant.runDueTasks(new Date(new Date(scheduled.run_at).getTime() + 1000));
+  assert.deepEqual(sent.map((m) => m.to), ['963955000111@s.whatsapp.net', owner.externalId]);
+
+  // 3. Appointments remind before; list and cancel are the owner's own tasks.
+  replies = await ownerSays('meeting with Sami tomorrow 16:00', { action: 'schedule', when: `${tomorrow} 16:00`, text: 'Meeting with Sami' }, 'o8');
+  assert.match(replies[0], /Saved #(\d+): Meeting with Sami.*remind you 30 min before/);
+  const event = mods.db.prepare("SELECT * FROM tasks WHERE kind = 'event' ORDER BY id DESC").get();
+  assert.equal(event.run_at, new Date(`${tomorrow}T12:30:00Z`).toISOString());
+  replies = await ownerSays('what do I have tomorrow?', { action: 'list', when: tomorrow }, 'o9');
+  assert.match(replies[0], /Meeting with Sami/);
+  assert.doesNotMatch(replies[0], /Call Ahmad/); // already done
+  replies = await ownerSays(`cancel #${event.id}`, { action: 'cancel', task_id: event.id }, 'o10');
+  assert.match(replies[0], new RegExp(`Cancelled #${event.id}`));
+  assert.equal(mods.db.prepare('SELECT status FROM tasks WHERE id = ?').get(event.id).status, 'cancelled');
+
+  // Past times are questioned, not saved.
+  replies = await ownerSays('remind me yesterday', { action: 'reminder', when: '2020-01-01 09:00', text: 'x' }, 'o11');
+  assert.match(replies[0], /already passed/);
+
+  // 4. Summary and Arabic help.
+  replies = await ownerSays('summary of today', { action: 'summary' }, 'o12');
+  assert.match(replies[0], /Today/);
+  replies = await ownerSays('شو بتقدر تعمل؟', { action: 'help' }, 'o13');
+  assert.match(replies[0], /ذكّرك/);
+
+  // 5. Anyone else still gets the normal customer answer, and the assistant can be turned off.
+  sent.length = 0;
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971508880000@s.whatsapp.net', handle: '+971508880000', convMeta: { phone: '+971508880000' }, text: 'what are your hours?', messageId: 'c1' });
+  await wait();
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0].text, /Reminder|I can/);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+  assert.equal(assistant.isOwnerConversation(mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === owner.externalId).id), false);
 });

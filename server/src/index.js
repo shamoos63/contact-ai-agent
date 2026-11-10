@@ -13,6 +13,7 @@ import { startChannels, stopChannels } from './channels/index.js';
 import { ensureModels } from './ai/ollama.js';
 import { loadModel } from './ai/speech.js';
 import { getSetting } from './settings.js';
+import { startScheduler } from './assistant/index.js';
 
 ensureAdmin();
 
@@ -44,6 +45,7 @@ server.listen(config.port, () => {
   console.log(`[server] Dashboard on http://localhost:${config.port}`);
   startChannels();
   ensureModels();
+  startScheduler();
   // Get the voice model ready (downloads it the first time) so the first voice note isn't slow.
   if (getSetting('voice').enabled) loadModel().catch(() => {});
 });

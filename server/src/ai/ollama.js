@@ -33,13 +33,15 @@ const keepAlive = () => getSetting('keep_alive') || '24h';
 const timings = [];
 const ms = (ns) => Math.round((ns || 0) / 1e6);
 
-export function chat(messages, { temperature } = {}) {
+// format: 'json' or a JSON schema, to get a structured answer (used by the owner assistant).
+export function chat(messages, { temperature, format } = {}) {
   return enqueue(async () => {
     const started = Date.now();
     const data = await call('/api/chat', {
       model: getSetting('chat_model'),
       messages,
       stream: false,
+      ...(format ? { format } : {}),
       keep_alive: keepAlive(),
       options: { temperature: temperature ?? getSetting('temperature'), num_ctx: Number(getSetting('context_size')) || 4096 },
     });
