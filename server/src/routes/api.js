@@ -12,7 +12,7 @@ import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
 import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
-import { normalizeAssistant, listTasks, cancelTask } from '../assistant/index.js';
+import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
 import { logoutWhatsApp } from '../channels/whatsapp.js';
@@ -230,6 +230,24 @@ api.post('/assistant/tasks/:id/cancel', wrap(async (req, res) => {
   cancelTask(Number(req.params.id));
   res.json({ ok: true });
 }));
+
+// --- Assistant saved contacts (each owner has their own list) ---
+api.get('/assistant/contacts', (req, res) => {
+  const owners = (getSetting('assistant').owners || []).map((o) => ({ key: ownerKey(o), name: o.name || o.phone || o.telegram })).filter((o) => o.key);
+  res.json({ owners, contacts: listOwnerContacts() });
+});
+api.post('/assistant/contacts', wrap(async (req, res) => {
+  const { owner_key, name, phone, email } = req.body || {};
+  try {
+    res.json(saveOwnerContact(owner_key, { name, phone, email }).contact);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}));
+api.delete('/assistant/contacts/:id', (req, res) => {
+  deleteOwnerContact(Number(req.params.id));
+  res.json({ ok: true });
+});
 
 // --- AI engine ---
 api.get('/speech/status', (req, res) => res.json(speechStatus()));

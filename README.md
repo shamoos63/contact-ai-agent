@@ -139,6 +139,8 @@ Under **Assistant**, turn it on, pick your time zone and add the people who may 
 - "Email sami@company.com the new price list: …": sent from your first email account.
 - "What do I have tomorrow?", "Cancel #12", "Summary of today".
 
+- "Save Nour +971 50 123 4567" / "احفظ رقم نور ‎+971…‎": remembered for that person only (each owner has their own list, also shown and editable on the page). Later "tell Nour…" uses it; when several people match (two Nours, or a saved Nour and a Nour from your chats), the bot lists them and you reply with the number. "My contacts" lists them and "forget Nour" deletes one. Numbers need their country code, so a message never reaches the wrong country.
+
 Messages and emails to other people are shown first and only go out after the owner replies **yes** (or **نعم / تمام / ابعت**); **no** cancels. You can turn this check off. An optional **daily summary** time sends each owner today's numbers (new chats, customer messages, requests passed to the team) and what's scheduled. Everything waiting shows in the **Coming up** list on the page, where it can be cancelled. Times are understood in the time zone you pick, so the server running in UTC doesn't matter. If the computer was off when something was due, it is sent as soon as the app is back, marked late.
 
 ### Email forwarding rules
