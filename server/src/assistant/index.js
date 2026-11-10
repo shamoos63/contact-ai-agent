@@ -195,6 +195,8 @@ const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكر
 const TIME_LEAD = /^\s*(((on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday)|بكرا|بكره|بكرة|غدا|غداً|اليوم)(?=\s|$))?\s*((at|الساعة|الساعه)\s*\d{1,2}([:.]\d{2})?\s*(am|pm|الصبح|الصباح|المسا|المساء|العصر|الظهر)?)?\s*(to\s+|إنو\s+|انو\s+)?/i;
 const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|ربع\s+ساعة|دقيقة|دقيقتين|\d+\s*(ساعات|ساعة|دقيقة|دقايق|دقائق))|in\s+(an?\s+hour|half\s+an\s+hour|\d+\s*(hours?|minutes?|mins?)))\s*(to\s+)?/i;
 const SPEECH = /(^|\s)(احكي مع|احكي ل|احكيلو|احكيلها|قلو|قله|قلها|قوللو|قول ل|قولي ل|خبر|خبرو|خبرها|بلغ|بلغو|ابعت ل|ابعتلو|ابعتلها|راسل|tell|message|text|let \S+ know)(?=\s|$)/i;
+// Words around a name in "save Nour's number +971…" / "احفظ رقم نور …".
+const SAVE_WORDS = /(^|\s)(please|save|remember|store|add|keep|the|number|phone|mobile|contact|email|of|for|is|as|under|احفظ|احفظلي|خزن|خزنلي|سجل|سجلي|ضيف|خلي|خليلي|عندك|رقم|نمرة|موبايل|تلفون|ايميل|إيميل|هو|هاد|هذا|اسمه|اسمها|باسم)(?=\s|$)|'s(?=\s|$)/gi;
 const PHONE = /\+?\d[\d\s-]{6,}\d/;
 
 // Small models get some things wrong; check them against what the owner actually wrote.
@@ -232,6 +234,8 @@ export function fixCommand(cmd, text, language) {
     if (cmd.to && digitsOf(cmd.to).length >= 7 && !written.includes(digitsOf(cmd.to).slice(-7))) {
       cmd.to = cmd.to.replace(/\+?\d[\d\s-]{5,}\d/g, '').replace(/[()]/g, '').trim() || null;
     }
+    // A bare prefix like "+971" is not a person: drop it and look for a name in the owner's words.
+    if (cmd.to && !/\p{L}/u.test(cmd.to) && digitsOf(cmd.to).length < 7) cmd.to = null;
     if (cmd.action === 'send_message' && !(cmd.to && digitsOf(cmd.to).length >= 7)) {
       const phone = text.match(PHONE)?.[0];
       if (phone && digitsOf(phone).length >= 7) cmd.to = phone;
@@ -276,7 +280,8 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
     `- "tell him / قلو / قلها X" means say X to the recipient directly, in your own words.`,
     `- "introduce yourself / عرفو عن حالك" means say you are ${who}'s assistant${company && company !== 'Our Company' ? ` at ${company}` : ''}.`,
     `- Never copy the instruction words (tell him, قلو, قلها, احكي مع, ابعت لـ, إنو) or any phone number into the message.`,
-    '- Greet them naturally. Keep it short, warm and polite.',
+    '- Greet them by name, then say what the owner asked, and nothing more: one or two short sentences, like a person texting.',
+    '- Never add offers, promises, apologies, "if you have any questions" lines or anything the owner did not say.',
     `- Write in ${language}${language === 'Arabic' ? ', in the same dialect the owner used' : ''}, unless ${who} asked for another language. Never use Chinese.`,
     '- Do not mention when it will be sent, do not add a signature line with placeholders, and do not invent facts, prices or promises.',
     'Answer with the message text only.',
@@ -464,6 +469,10 @@ async function sendEmailNow(target, subject, text) {
 
 async function carryOut(action, conv, owner, language) {
   const tz = timeZone();
+  if (action.kind === 'forget') {
+    deleteOwnerContact(action.contactId);
+    return say(language, `🗑️ Deleted ${action.label}.`, `🗑️ مسحت ${action.label}.`);
+  }
   const later = action.when && new Date(action.when).getTime() > Date.now() + 60e3;
   if (later) {
     const id = insertTask({
@@ -605,12 +614,14 @@ async function act(cmd, conv, owner, language) {
       return say(language, `🗑️ Cancelled #${id}.`, `🗑️ انلغت #${id}.`);
     }
     case 'save_contact': {
-      const name = String(cmd.to || '').replace(/\+?\d[\d\s-]{5,}\d/g, '').replace(/[^\p{L}\p{N}\s.'-]/gu, ' ').replace(/\s+/g, ' ').trim();
       const phone = (cmd.said || '').match(PHONE)?.[0];
       const email = (cmd.said || '').match(/[^\s<>"'،,]+@[^\s<>"'،,]+\.[a-z]{2,}/i)?.[0];
+      const tidy = (v) => String(v || '').replace(/\+?\d[\d\s-]{5,}\d/g, ' ').replace(/[^\s<>"'،,]+@[^\s<>"'،,]+/g, ' ').replace(/[^\p{L}\p{N}\s.'-]/gu, ' ').replace(/\s+/g, ' ').trim();
+      let name = tidy(cmd.to);
+      if (!/\p{L}/u.test(name)) name = tidy(String(cmd.said || '').replace(SAVE_WORDS, ' ').replace(SAVE_WORDS, ' '));
+      if (phone && isLocalNumber(phone)) return asking(needCountryCode(language));
       if (!name) return asking(say(language, 'What name should I save it under?', 'باسم مين بدك احفظه؟'));
       if (!(phone && digitsOf(phone).length >= 7) && !email) return asking(say(language, `What is ${name}'s number?`, `شو رقم ${name}؟`));
-      if (phone && isLocalNumber(phone)) return asking(needCountryCode(language));
       const { contact, existed } = saveOwnerContact(ownerKey(owner), { name, phone, email });
       const first = nameWords(name)[0] || name;
       const others = listOwnerContacts(ownerKey(owner)).filter((c) => c.id !== contact.id && (nameMatches(c.name, first) || nameMatches(first, c.name))).length;
@@ -628,8 +639,9 @@ async function act(cmd, conv, owner, language) {
         updateMeta(conv.id, { assistantChoice: { cmd, options, language, at: Date.now() } });
         return asking(say(language, `Which one should I delete?\n${chooseList(options, language)}\nReply with the number.`, `أي واحد امسح؟\n${chooseList(options, language)}\nرد بالرقم.`));
       }
-      deleteOwnerContact(hits[0].id);
-      return say(language, `🗑️ Deleted ${hits[0].name}.`, `🗑️ مسحت ${hits[0].name}.`);
+      const label = `${hits[0].name} (${hits[0].phone || hits[0].email})`;
+      updateMeta(conv.id, { assistantPending: { action: { kind: 'forget', contactId: hits[0].id, label }, language, at: Date.now() } });
+      return say(language, `Delete ${label}? Reply "yes" or "no".`, `امسح ${label}؟ رد "نعم" أو "لا".`);
     }
     case 'contacts': {
       const mine = listOwnerContacts(ownerKey(owner));
@@ -650,6 +662,8 @@ const YES = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'send', 'confirm', 'yep',
 const NO = new Set(['no', 'n', 'cancel', 'stop', 'nope', 'لا', 'لأ', 'الغي', 'ألغي', 'إلغاء', 'الغاء', 'بلا', '❌']);
 const firstWord = (text) => String(text || '').trim().toLowerCase().replace(/[.!؟?,،]+/g, ' ').split(/\s+/)[0] || '';
 
+const BARE_NUMBER = /^\s*#?[\d٠-٩]{1,2}\s*$/;
+
 let chain = Promise.resolve();
 export function handleOwnerMessage(conversationId) {
   const run = chain.then(() => processOwnerMessage(conversationId));
@@ -662,7 +676,10 @@ async function processOwnerMessage(conversationId) {
   const owner = ownerOf(conv);
   if (!owner) return;
   const text = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId)?.text || '';
-  const language = detectLanguage([{ role: 'user', content: text }]);
+  // "1" or "👍" has no language of its own: answer in the language of the owner's last real message.
+  const hasWords = /\p{L}{2,}/u.test(text);
+  const language = hasWords ? detectLanguage([{ role: 'user', content: text }]) : conv.meta.assistantLanguage || 'English';
+  if (hasWords && !YES.has(firstWord(text)) && !NO.has(firstWord(text))) updateMeta(conversationId, { assistantLanguage: language });
   const reply = (body) => sendMessage(conversationId, body, { sender: 'ai', meta: { assistant: true } });
 
   emit('typing', { conversationId, typing: true });
@@ -676,8 +693,10 @@ async function processOwnerMessage(conversationId) {
       }
       if (NO.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
-        return await reply(say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
+        return await reply(pending.action.kind === 'forget' ? say(language, 'OK, kept.', 'تمام، ما مسحت شي.') : say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
+      // A bare number while a yes/no question is open is not a new request.
+      if (BARE_NUMBER.test(text)) return await reply(say(language, 'Please reply "yes" or "no".', 'رد "نعم" أو "لا" لو سمحت.'));
     }
     // The owner picked one of several people with the same name.
     const choice = conv.meta.assistantChoice;
@@ -688,13 +707,16 @@ async function processOwnerMessage(conversationId) {
         const picked = choice.options[n - 1];
         const lang = choice.language || language; // "2" has no language of its own
         if (choice.cmd.action === 'forget_contact') {
-          deleteOwnerContact(picked.contactId);
-          return await reply(say(lang, `🗑️ Deleted ${picked.label}.`, `🗑️ مسحت ${picked.label}.`));
+          updateMeta(conversationId, { assistantPending: { action: { kind: 'forget', contactId: picked.contactId, label: picked.label }, language: lang, at: Date.now() } });
+          return await reply(say(lang, `Delete ${picked.label}? Reply "yes" or "no".`, `امسح ${picked.label}؟ رد "نعم" أو "لا".`));
         }
         const out = await act({ ...choice.cmd, target: picked }, getConversation(conversationId), owner, lang);
         if (out?.ask) updateMeta(conversationId, { assistantAsked: Date.now() });
         return await reply(out?.ask || out);
       }
+    }
+    if (choice && Date.now() - choice.at < CONFIRM_MINUTES * 60e3 && BARE_NUMBER.test(text)) {
+      return await reply(say(language, `Please reply with a number from 1 to ${choice.options.length}, or "no".`, `رد برقم من 1 لـ ${choice.options.length}، أو "لا".`));
     }
     if (choice) updateMeta(conversationId, { assistantChoice: null });
     const asked = conv.meta.assistantAsked;

@@ -653,7 +653,48 @@ test('assistant: each owner remembers their own contacts and picks between peopl
   reply = await say(hisham, 'امسح رقم نور', { action: 'forget_contact', to: 'نور' }, 'n12');
   assert.match(reply, /أي واحد امسح/);
   reply = await say(hisham, '١٢'.charAt(reply.split('\n').findIndex((l) => /نور \(/.test(l)) - 1), null, 'n13');
+  assert.match(reply, /امسح نور \(\+971501112233\)؟/);
+  reply = await say(hisham, 'نعم', null, 'n13b');
   assert.match(reply, /مسحت نور/);
   assert.equal(assistant.listOwnerContacts(assistant.ownerKey({ phone: '+963944111222' })).length, 1);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('assistant: contacts work the way the real model answers (names from Arabic, stray prefixes, bare numbers)', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Lina', phone: '+963944555666' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const lina = { channel: 'whatsapp', externalId: '963944555666@s.whatsapp.net', handle: '+963944555666', convMeta: { phone: '+963944555666' }, autoReply: false };
+  const say = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...lina, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 300));
+    return sent.filter((m) => m.to === lina.externalId).at(-1).text;
+  };
+  // The model gives no name: it comes from Lina's own words. A local number asks for the country code first.
+  let reply = await say('احفظ رقم نور 0501112233', { action: 'save_contact', to: null }, 'l1');
+  assert.match(reply, /رمز الدولة/);
+  reply = await say('احفظ رقم نور +971501112233', { action: 'save_contact', to: null }, 'l2');
+  assert.match(reply, /حفظت نور: \+971501112233/);
+  reply = await say("save Ziad's number +971 52 000 1111", { action: 'save_contact', to: '+971' }, 'l3');
+  assert.match(reply, /Saved Ziad: \+971520001111/);
+
+  // "+971" from the model is not a name: Ziad is found from Lina's words.
+  reply = await say('tell Ziad the meeting is tomorrow', { action: 'send_message', to: '+971', text: 'The meeting is tomorrow.' }, 'l4');
+  assert.match(reply, /WhatsApp to Ziad \(\+971520001111\)/);
+  // A bare "1" during a draft gets a yes/no reminder in English, and nothing is sent.
+  reply = await say('1', null, 'l5');
+  assert.equal(reply, 'Please reply "yes" or "no".');
+  reply = await say('no', null, 'l6');
+  assert.equal(reply, 'OK, not sent.');
+
+  // Deleting asks first; "لا" keeps the contact.
+  reply = await say('امسح رقم زياد', { action: 'forget_contact', to: 'زياد' }, 'l7');
+  assert.match(reply, /امسح Ziad \(\+971520001111\)؟/);
+  reply = await say('لا', null, 'l8');
+  assert.match(reply, /ما مسحت شي/);
+  assert.equal(assistant.listOwnerContacts(assistant.ownerKey({ phone: '+963944555666' })).length, 2);
+  assert.equal(sent.filter((m) => m.to !== lina.externalId).length, 0);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
