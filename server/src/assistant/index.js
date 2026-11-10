@@ -216,6 +216,11 @@ export function fixCommand(cmd, text, language) {
   if (cmd.action === 'send_message' || cmd.action === 'send_email') {
     if (cmd.text && CJK.test(cmd.text)) cmd.text = null;
     if (cmd.text && cmd.when) cmd.text = cmd.text.replace(TIME_PHRASE, '').trim() || cmd.text;
+    // Models sometimes make up a number. Only numbers the owner actually wrote are used.
+    const written = digitsOf(text);
+    if (cmd.to && digitsOf(cmd.to).length >= 7 && !written.includes(digitsOf(cmd.to).slice(-7))) {
+      cmd.to = cmd.to.replace(/\+?\d[\d\s-]{5,}\d/g, '').replace(/[()]/g, '').trim() || null;
+    }
     if (cmd.action === 'send_message' && !(cmd.to && digitsOf(cmd.to).length >= 7)) {
       const phone = text.match(PHONE)?.[0];
       if (phone && digitsOf(phone).length >= 7) cmd.to = phone;
@@ -228,6 +233,15 @@ export function fixCommand(cmd, text, language) {
   if (cmd.reply && CJK.test(cmd.reply)) cmd.reply = null;
   cmd.said = text;
   return cmd;
+}
+
+// Remove instruction words and numbers a small model copied into the message.
+function cleanDraft(text, target) {
+  let out = text;
+  const digits = digitsOf(target.phone || target.label || '');
+  if (digits.length >= 7) out = out.replace(/\s*(لـ|ل|to)?\s*\+?\d[\d\s-]{5,}\d/g, (m) => (digitsOf(m).slice(-7) === digits.slice(-7) ? '' : m));
+  out = out.replace(/(^|[\s،,.])(قل(و|ه|ها|لو|ي)|احكي مع|ابعت(ل|لـ)?|tell (him|her|them))(?=[\s،,.]|$)\s*(لـ|ل)?\s*(إنو|انو|إنه|أنه|أن|that)?/gi, '$1');
+  return out.replace(/\s{2,}/g, ' ').replace(/\s+([،,.!؟?])/g, '$1').trim();
 }
 
 // The language the recipient wrote to us in, if they have.
@@ -249,7 +263,8 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
     cmd.text ? `Draft: ${cmd.text}` : '',
     `Write the ${isEmail ? 'email body' : 'message'} that ${recipient && !/^\+?\d/.test(recipient) ? recipient : 'the recipient'} will read. Do what ${who} meant, not their exact words:`,
     `- "tell him / قلو / قلها X" means say X to the recipient directly, in your own words.`,
-    `- "introduce yourself / عرفو عن حالك" means say you are ${who}'s assistant at ${company}.`,
+    `- "introduce yourself / عرفو عن حالك" means say you are ${who}'s assistant${company && company !== 'Our Company' ? ` at ${company}` : ''}.`,
+    `- Never copy the instruction words (tell him, قلو, قلها, احكي مع, ابعت لـ, إنو) or any phone number into the message.`,
     '- Greet them naturally. Keep it short, warm and polite.',
     `- Write in ${language}${language === 'Arabic' ? ', in the same dialect the owner used' : ''}, unless ${who} asked for another language. Never use Chinese.`,
     '- Do not mention when it will be sent, do not add a signature line with placeholders, and do not invent facts, prices or promises.',
@@ -257,7 +272,7 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
   ].filter(Boolean).join('\n');
   try {
     const out = (await chat([{ role: 'system', content: system }, { role: 'user', content: 'Write it now.' }], { temperature: 0.3 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
-    if (out && !CJK.test(out)) return out;
+    if (out && !CJK.test(out)) return cleanDraft(out, target);
   } catch (err) {
     console.error('[assistant] Writing the message failed:', err.message);
   }
@@ -279,8 +294,50 @@ function phoneOf(conv) {
   return null;
 }
 
-function resolveRecipient(to, language) {
-  const wanted = String(to || '').trim();
+// A rough consonant skeleton, so "منى" matches "Mona" and "محمد" matches "Mohammad".
+const AR = { ب: 'b', ت: 't', ث: 't', ج: 'j', ح: 'h', خ: 'k', د: 'd', ذ: 'z', ر: 'r', ز: 'z', س: 's', ش: 'x', ص: 's', ض: 'd', ط: 't', ظ: 'z', غ: 'g', ف: 'f', ق: 'k', ك: 'k', ل: 'l', م: 'm', ن: 'n', ه: 'h' };
+function skeleton(word) {
+  let w = String(word || '').toLowerCase();
+  if (/[\u0600-\u06FF]/.test(w)) {
+    w = [...w.replace(/^ال(?=..)/, '').replace(/[هة]$/, '')].map((ch) => AR[ch] || '').join('');
+  } else {
+    w = w.replace(/^al-?(?=..)/, '').replace(/(sh|ch)/g, 'x').replace(/kh/g, 'k').replace(/gh/g, 'g').replace(/th/g, 't').replace(/dh/g, 'z').replace(/ph/g, 'f')
+      .replace(/h$/, '').replace(/[^a-z]/g, '').replace(/[aeiouwy]/g, '').replace(/[cq]/g, 'k').replace(/g/g, 'j').replace(/v/g, 'f').replace(/p/g, 'b');
+  }
+  return w.replace(/(.)\1+/g, '$1');
+}
+const nameWords = (name) => String(name || '').split(/[\s.,،_-]+/).filter((w) => w.length >= 2);
+function nameMatches(contactName, wanted) {
+  const a = String(contactName || '').toLowerCase();
+  const b = String(wanted || '').toLowerCase().trim();
+  if (!a || !b) return false;
+  if (a.includes(b)) return true;
+  const want = nameWords(b).map(skeleton).filter((k) => k.length >= 2);
+  const have = nameWords(a).map(skeleton);
+  return want.length > 0 && want.every((k) => have.includes(k));
+}
+
+function contactList() {
+  const owners = new Set(ownerConversationIds());
+  return db
+    .prepare("SELECT * FROM conversations WHERE channel IN ('whatsapp', 'telegram') AND (contact_name IS NOT NULL OR contact_handle IS NOT NULL) ORDER BY last_message_at DESC LIMIT 1000")
+    .all()
+    .filter((c) => !owners.has(c.id))
+    .map((c) => {
+      const meta = JSON.parse(c.meta || '{}');
+      const where = c.channel === 'whatsapp' ? phoneOf({ ...c, meta }) || 'WhatsApp' : `Telegram ${c.contact_handle || ''}`.trim();
+      return { conversationId: c.id, name: c.contact_name || c.contact_handle, handle: c.contact_handle, label: `${c.contact_name || c.contact_handle} (${where})` };
+    });
+}
+
+function resolveRecipient(to, language, said = '') {
+  let wanted = String(to || '').trim();
+  // No name from the model: look for a known contact's name in what the owner wrote.
+  if (!wanted && said) {
+    const words = nameWords(said);
+    const hits = contactList().filter((c) => c.name && nameWords(c.name).some((n) => words.some((w) => n.length >= 3 && skeleton(n).length >= 2 && (w.toLowerCase() === n.toLowerCase() || skeleton(w) === skeleton(n)))));
+    if (hits.length === 1) return hits[0];
+  }
   if (!wanted) return { ask: say(language, 'Who should I send it to? Send me their name or number.', 'لمين بدك ابعتها؟ ابعتلي الاسم أو الرقم.') };
   const digits = digitsOf(wanted);
   if (digits.length >= 7) {
@@ -291,19 +348,9 @@ function resolveRecipient(to, language) {
       ? { conversationId: conv.id, label: `${conv.contact_name || phoneOf(conv)} (${phoneOf(conv)})` }
       : { phone: '+' + digits, label: '+' + digits };
   }
-  const owners = new Set(ownerConversationIds());
-  const like = `%${wanted}%`;
-  const found = db
-    .prepare("SELECT * FROM conversations WHERE channel IN ('whatsapp', 'telegram') AND (contact_name LIKE ? OR contact_handle LIKE ?) ORDER BY last_message_at DESC LIMIT 10")
-    .all(like, like)
-    .filter((c) => !owners.has(c.id))
-    .map((c) => {
-      const meta = JSON.parse(c.meta || '{}');
-      const where = c.channel === 'whatsapp' ? phoneOf({ ...c, meta }) || 'WhatsApp' : `Telegram ${c.contact_handle || ''}`.trim();
-      return { conversationId: c.id, label: `${c.contact_name || c.contact_handle} (${where})` };
-    });
+  const found = contactList().filter((c) => nameMatches(c.name, wanted) || String(c.handle || '').toLowerCase().includes(wanted.toLowerCase())).slice(0, 10);
   const team = teamContacts()
-    .filter((m) => m.phone && m.name && m.name.toLowerCase().includes(wanted.toLowerCase()))
+    .filter((m) => m.phone && m.name && nameMatches(m.name, wanted))
     .map((m) => ({ phone: m.phone, label: `${m.name} (${m.phone})` }));
   const all = [...found, ...team.filter((t) => !found.some((f) => f.label.includes(digitsOf(t.phone).slice(-9))))];
   if (all.length === 1) return all[0];
@@ -430,7 +477,7 @@ async function act(cmd, conv, owner, language) {
     case 'send_message':
     case 'send_email': {
       const isEmail = cmd.action === 'send_email';
-      const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language);
+      const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language, cmd.said);
       if (target.ask) return asking(target.ask);
       // Words in quotes ("…", «…») are sent as written; anything else is an instruction the assistant carries out.
       const quoted = String(cmd.said || '').match(/["“«]([^"”»]{2,})["”»]/)?.[1]?.trim();

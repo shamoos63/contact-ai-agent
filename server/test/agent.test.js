@@ -573,3 +573,28 @@ test('assistant: messages are written from the owner\'s instructions, quotes are
   await say('no', null, 'w4');
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('assistant: made-up numbers are ignored, Arabic names find Latin contacts, drafts lose instruction words', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Hisham', phone: '+963944111222' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971507771111@s.whatsapp.net', name: 'Mohammad Saleh', handle: '+971507771111', meta: { phone: '+971507771111' } });
+  const owner = { channel: 'whatsapp', externalId: '963944111222@s.whatsapp.net', handle: '+963944111222', convMeta: { phone: '+963944111222' }, autoReply: false };
+  const say = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 300));
+    return sent.filter((m) => m.to === owner.externalId).at(-1).text;
+  };
+  // The model invents a number for a name: the name is used instead, and "محمد" finds "Mohammad Saleh".
+  let reply = await say('احكي مع محمد قلو الطلب جاهز', { action: 'send_message', to: '+963555555555', text: 'قلو لـ +971507771111 إنو الطلب جاهز' }, 'm1');
+  assert.match(reply, /Mohammad Saleh \(\+971507771111\)/);
+  assert.doesNotMatch(reply, /555555/);
+  assert.doesNotMatch(reply.split('\n\n')[1], /قلو|971507771111/);
+  await say('لا', null, 'm2');
+  reply = await say('احكي مع منى قلو كيفك', { action: 'send_message', to: 'منى', text: 'كيفك' }, 'm3');
+  assert.match(reply, /Mona Client/);
+  await say('لا', null, 'm4');
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
