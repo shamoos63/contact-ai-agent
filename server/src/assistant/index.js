@@ -5,7 +5,7 @@ import { detectLanguage } from '../ai/agent.js';
 import { getConversation, sendMessage, updateMeta, ensureConversation } from '../inbox.js';
 import { outboundSenders, teamContacts } from '../handoff.js';
 import { emit } from '../realtime.js';
-import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone } from './time.js';
+import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
 
 // The owner assistant: numbers chosen under "Assistant" can message the bot (text or voice) to give
 // it tasks: reminders, appointments, messages to clients and emails, now or later. Anything that
@@ -72,6 +72,8 @@ export function normalizeAssistant(value) {
 }
 
 const say = (language, en, ar) => (language === 'Arabic' ? ar : en);
+// A question back to the owner. While it is open, "no" cancels instead of starting something new.
+const asking = (text) => ({ ask: text });
 
 // --- Tasks ---
 function insertTask({ kind, conv, owner, runAt, payload }) {
@@ -129,6 +131,17 @@ const SCHEMA = {
   required: ['action'],
 };
 
+// The next seven days, so the model doesn't have to work out which date "Thursday" is.
+function calendar() {
+  const tz = timeZone();
+  const today = toLocal(new Date(), tz).slice(0, 10);
+  return Array.from({ length: 8 }, (_, n) => {
+    const d = new Date(Date.parse(`${today}T12:00:00Z`) + n * 86400e3);
+    const name = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+    return `${name} ${d.toISOString().slice(0, 10)}${n === 0 ? ' (today)' : n === 1 ? ' (tomorrow)' : ''}`;
+  }).join(', ');
+}
+
 function systemPrompt(owner, language) {
   const tz = timeZone();
   return [
@@ -145,17 +158,17 @@ function systemPrompt(owner, language) {
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
     '  chat: anything else; answer briefly in "reply".',
-    '- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Work out words like tomorrow, Thursday, بكرا, بعد ساعة, الأحد. If only a day is given for a reminder, use 09:00.',
-    '- text: the reminder text, the appointment title, or the exact message or email body to send. Write a message to a recipient as addressed to them, in the language the owner wants it in.',
-    '- to: for send_message the person\'s name or phone number exactly as the owner gave it; for send_email the email address or name. Otherwise null.',
+    `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
+    `- text: for reminder and schedule, what to remember, short, in ${language}, without "remind me" and without the date or time. For send_message and send_email, the message itself, written to the recipient in ${language} unless the owner asks for another language, WITHOUT the delivery time ("tomorrow at 10" is for "when", not for the message).`,
+    '- to: for send_message the person\'s name or the phone number exactly as written in the message (digits and +); for send_email the email address or name. Otherwise null.',
     '- subject: the email subject, or null.',
     '- task_id: for cancel, the task number. Otherwise null.',
     `- reply: for help or chat, a short answer in ${language}. Otherwise "".`,
-    'Answer with the JSON object only.',
+    'Write only Arabic or English, never Chinese. Answer with the JSON object only.',
   ].join('\n');
 }
 
-async function understand(conv, owner, language) {
+async function understand(conv, owner, language, text) {
   const history = db
     .prepare("SELECT direction, text FROM messages WHERE conversation_id = ? AND direction <> 'note' AND error IS NULL ORDER BY id DESC LIMIT 5")
     .all(conv.id)
@@ -169,6 +182,50 @@ async function understand(conv, owner, language) {
     return { action: 'help' };
   }
   if (!ACTIONS.includes(cmd.action)) cmd.action = 'chat';
+  return fixCommand(cmd, text, language);
+}
+
+const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
+const REMIND_ME = /^\s*(please\s+)?(remind\s+me\s+(to\s+|about\s+|that\s+)?|ذكر(ني|نى)\s*|تذكر(ني|نى)\s*|فكرني\s*)/i;
+const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكرة|غدا|غدًا|غداً|اليوم|الأحد|الاحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الاربعاء|الخميس|الجمعة|السبت)|(on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday))?[\s,،]*(الساعة|الساعه|ع\s*الساعة|at)\s*\d{1,2}([:.]\d{2})?\s*(الصبح|الصباح|صباحا|صباحاً|المسا|المساء|مساء|مساءً|العصر|عصرا|الظهر|ظهرا|بالليل|am|pm|a\.m\.|p\.m\.)?[\s.!]*$/i;
+const TIME_LEAD = /^\s*(((on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday)|بكرا|بكره|بكرة|غدا|غداً|اليوم)(?=\s|$))?\s*((at|الساعة|الساعه)\s*\d{1,2}([:.]\d{2})?\s*(am|pm|الصبح|الصباح|المسا|المساء|العصر|الظهر)?)?\s*(to\s+|إنو\s+|انو\s+)?/i;
+const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|ربع\s+ساعة|دقيقة|دقيقتين|\d+\s*(ساعات|ساعة|دقيقة|دقايق|دقائق))|in\s+(an?\s+hour|half\s+an\s+hour|\d+\s*(hours?|minutes?|mins?)))\s*(to\s+)?/i;
+const PHONE = /\+?\d[\d\s-]{6,}\d/;
+
+// Small models get some things wrong; check them against what the owner actually wrote.
+export function fixCommand(cmd, text, language) {
+  const tz = timeZone();
+  const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  cmd.text = clean(cmd.text);
+  cmd.to = clean(cmd.to);
+  cmd.when = clean(cmd.when);
+
+  // The date of "Thursday" / "بكرا" comes from the words, not from the model's arithmetic.
+  const day = dayFromWords(text, new Date(), tz);
+  if (cmd.when && day && !(cmd.text || '').toLowerCase().includes(day.word) && /^\d{4}-\d{2}-\d{2}/.test(cmd.when)) {
+    cmd.when = day.date + cmd.when.slice(10);
+  }
+  if (!cmd.when && day && ['reminder', 'schedule', 'list'].includes(cmd.action)) cmd.when = cmd.action === 'list' ? day.date : null;
+
+  if (cmd.action === 'reminder' || cmd.action === 'schedule') {
+    // Chinese, or Arabic for an owner who wrote in English: use the owner's own words instead.
+    if (cmd.text && (CJK.test(cmd.text) || (language === 'English' && /[\u0600-\u06FF]/.test(cmd.text)))) cmd.text = null;
+    if (!cmd.text) cmd.text = text.replace(REMIND_ME, '').replace(TIME_LEAD, '').trim() || null;
+    if (cmd.text) cmd.text = cmd.text.replace(REMIND_ME, '').replace(RELATIVE, '').replace(TIME_LEAD, '').replace(TIME_PHRASE, '').trim() || cmd.text;
+  }
+  if (cmd.action === 'send_message' || cmd.action === 'send_email') {
+    if (cmd.text && CJK.test(cmd.text)) cmd.text = null;
+    if (cmd.text && cmd.when) cmd.text = cmd.text.replace(TIME_PHRASE, '').trim() || cmd.text;
+    if (cmd.action === 'send_message' && !(cmd.to && digitsOf(cmd.to).length >= 7)) {
+      const phone = text.match(PHONE)?.[0];
+      if (phone && digitsOf(phone).length >= 7) cmd.to = phone;
+    }
+    if (cmd.action === 'send_email' && !(cmd.to && cmd.to.includes('@'))) {
+      const address = text.match(/[^\s<>"'،,]+@[^\s<>"'،,]+\.[a-z]{2,}/i)?.[0];
+      if (address) cmd.to = address;
+    }
+  }
+  if (cmd.reply && CJK.test(cmd.reply)) cmd.reply = null;
   return cmd;
 }
 
@@ -319,14 +376,14 @@ async function act(cmd, conv, owner, language) {
   switch (cmd.action) {
     case 'reminder': {
       const t = needTime(cmd, language);
-      if (t.ask) return t.ask;
+      if (t.ask) return asking(t.ask);
       const text = cmd.text || say(language, 'Reminder', 'تذكير');
       const id = insertTask({ kind: 'reminder', conv, owner, runAt: t.when, payload: { text, language } });
       return say(language, `⏰ Reminder #${id} set for ${pretty(t.when, tz, language)}: ${text}`, `⏰ تم ضبط التذكير #${id} بتاريخ ${pretty(t.when, tz, language)}: ${text}`);
     }
     case 'schedule': {
       const t = needTime(cmd, language);
-      if (t.ask) return t.ask;
+      if (t.ask) return asking(t.ask);
       const title = cmd.text || say(language, 'Appointment', 'موعد');
       const before = s.event_reminder_minutes ?? 30;
       const remindAt = new Date(Math.max(Date.now(), t.when.getTime() - before * 60e3));
@@ -338,13 +395,13 @@ async function act(cmd, conv, owner, language) {
     case 'send_message':
     case 'send_email': {
       const isEmail = cmd.action === 'send_email';
-      if (!cmd.text) return say(language, 'What should the message say?', 'شو بدك تقول الرسالة؟');
+      if (!cmd.text) return asking(say(language, 'What should the message say?', 'شو بدك تقول الرسالة؟'));
       const target = isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language);
-      if (target.ask) return target.ask;
+      if (target.ask) return asking(target.ask);
       let when = null;
       if (cmd.when) {
         const t = needTime(cmd, language);
-        if (t.ask) return t.ask;
+        if (t.ask) return asking(t.ask);
         when = t.when.toISOString();
       }
       const action = {
@@ -380,7 +437,7 @@ async function act(cmd, conv, owner, language) {
     case 'cancel': {
       const id = Number(cmd.task_id || String(cmd.text || '').match(/\d+/)?.[0]);
       const t = id && db.prepare("SELECT * FROM tasks WHERE id = ? AND status = 'pending' AND (owner_conversation_id = ? OR owner_conversation_id IS NULL)").get(id, conv.id);
-      if (!t) return say(language, 'Which task number? Send "list" to see them.', 'أي رقم مهمة؟ ابعت "شو عندي" لتشوفهم.');
+      if (!t) return asking(say(language, 'Which task number? Send "list" to see them.', 'أي رقم مهمة؟ ابعت "شو عندي" لتشوفهم.'));
       finishTask(id, 'cancelled', `Cancelled by ${owner.name || 'owner'}`);
       return say(language, `🗑️ Cancelled #${id}.`, `🗑️ انلغت #${id}.`);
     }
@@ -427,9 +484,20 @@ async function processOwnerMessage(conversationId) {
         return await reply(say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
     }
-    if (pending) updateMeta(conversationId, { assistantPending: null });
-    const cmd = await understand(conv, owner, language);
-    await reply(await act(cmd, getConversation(conversationId), owner, language));
+    const asked = conv.meta.assistantAsked;
+    if (asked && Date.now() - asked < CONFIRM_MINUTES * 60e3 && NO.has(firstWord(text))) {
+      updateMeta(conversationId, { assistantPending: null, assistantAsked: null });
+      return await reply(say(language, 'OK, cancelled.', 'تمام، انلغى.'));
+    }
+    if (pending || asked) updateMeta(conversationId, { assistantPending: null, assistantAsked: null });
+    const cmd = await understand(conv, owner, language, text);
+    const out = await act(cmd, getConversation(conversationId), owner, language);
+    if (out?.ask) {
+      updateMeta(conversationId, { assistantAsked: Date.now() });
+      await reply(out.ask);
+    } else {
+      await reply(out);
+    }
   } catch (err) {
     console.error('[assistant] Failed:', err);
     await reply(say(language, `⚠️ Something went wrong: ${err.message}`, `⚠️ صار خطأ: ${err.message}`));
