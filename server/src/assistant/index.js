@@ -271,13 +271,14 @@ function recipientLanguage(target) {
 async function composeMessage(cmd, target, owner, language, isEmail) {
   const company = getSetting('company_name');
   const who = owner.name || 'the owner';
-  const recipient = String(target.label || '').replace(/\s*[(<].*$/, '').trim();
+  const recipient = target.callAs || String(target.label || '').replace(/\s*[(<].*$/, '').trim();
   const system = [
     `You write ${isEmail ? 'emails' : 'WhatsApp messages'} on behalf of ${who} at ${company}. You are ${who}'s AI assistant.`,
     `${who} asked you: «${cmd.said}»`,
     cmd.text ? `Draft: ${cmd.text}` : '',
     `Write the ${isEmail ? 'email body' : 'message'} that ${recipient && !/^\+?\d/.test(recipient) ? recipient : 'the recipient'} will read. Do what ${who} meant, not their exact words:`,
     `- "tell him / قلو / قلها X" means say X to the recipient directly, in your own words.`,
+    recipient && !/^\+?\d/.test(recipient) ? `- Call them "${recipient}", spelled exactly like that.` : '- Do not guess their name.',
     `- "introduce yourself / عرفو عن حالك" means say you are ${who}'s assistant${company && company !== 'Our Company' ? ` at ${company}` : ''}.`,
     `- Never copy the instruction words (tell him, قلو, قلها, احكي مع, ابعت لـ, إنو) or any phone number into the message.`,
     '- Greet them by name, then say what the owner asked, and nothing more: one or two short sentences, like a person texting.',
@@ -396,10 +397,31 @@ function savedTarget(c) {
 
 const chooseList = (options, language) => options.map((o, i) => `${i + 1}. ${o.label}${o.saved ? say(language, ' · saved', ' · محفوظ') : ''}`).join('\n');
 
+// Saved contacts named in the owner's own words, with the word they used ("نور" for "Nour Haddad").
+// The owner's words beat the model's guess of the name.
+function namedInWords(contacts, said) {
+  const words = nameWords(said);
+  const out = [];
+  for (const c of contacts) {
+    for (const n of nameWords(c.name)) {
+      const w = words.find((x) => n.length >= 3 && skeleton(n).length >= 2 && (x.toLowerCase() === n.toLowerCase() || skeleton(x) === skeleton(n)));
+      if (w) { out.push({ c, word: w }); break; }
+    }
+  }
+  return out;
+}
+
 function resolveRecipient(to, language, said = '', owner = null) {
   let wanted = String(to || '').trim();
   // No name from the model: look for a known contact's name in what the owner wrote.
   const saved = listOwnerContacts(ownerKey(owner)).filter((c) => c.phone);
+  const spoken = said && !digitsOf(wanted).length ? namedInWords(saved, said) : [];
+  if (spoken.length) {
+    const word = spoken[0].word;
+    const mine = spoken.map(({ c }) => ({ ...savedTarget(c), callAs: word }));
+    if (mine.length === 1) return mine[0];
+    return { choose: mine, wanted: word };
+  }
   if (!wanted && said) {
     const words = nameWords(said);
     const wordHit = (name) => nameWords(name).some((n) => words.some((w) => n.length >= 3 && skeleton(n).length >= 2 && (w.toLowerCase() === n.toLowerCase() || skeleton(w) === skeleton(n))));
@@ -632,7 +654,9 @@ async function act(cmd, conv, owner, language) {
     }
     case 'forget_contact': {
       const wanted = String(cmd.to || '').trim();
-      const hits = listOwnerContacts(ownerKey(owner)).filter((c) => wanted && nameMatches(c.name, wanted));
+      const all = listOwnerContacts(ownerKey(owner));
+      const spoken = namedInWords(all, cmd.said || '').map(({ c }) => c);
+      const hits = spoken.length ? spoken : all.filter((c) => wanted && nameMatches(c.name, wanted));
       if (!hits.length) return say(language, `I don't have "${wanted}" saved.`, `ما عندي "${wanted}" محفوظ.`);
       if (hits.length > 1) {
         const options = hits.map((c) => ({ contactId: c.id, label: `${c.name} (${c.phone || c.email})` }));

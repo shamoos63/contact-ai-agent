@@ -689,12 +689,21 @@ test('assistant: contacts work the way the real model answers (names from Arabic
   reply = await say('no', null, 'l6');
   assert.equal(reply, 'OK, not sent.');
 
+  // Two people called Nour: the bot asks "which نور" even if the model names one, and deleting asks which one too.
+  await say('save Nour Haddad +971 55 999 8877', { action: 'save_contact', to: 'Nour Haddad' }, 'l3b');
+  reply = await say('احكي مع نور قلها الاجتماع بكرا', { action: 'send_message', to: 'Nour Haddad', text: 'الاجتماع بكرا' }, 'l3c');
+  assert.match(reply, /أي "نور"؟/);
+  await say('لا', null, 'l3d');
+  reply = await say('امسح رقم نور', { action: 'forget_contact', to: 'Nour Haddad' }, 'l3e');
+  assert.match(reply, /أي واحد امسح/);
+  await say('لا', null, 'l3f');
+
   // Deleting asks first; "لا" keeps the contact.
   reply = await say('امسح رقم زياد', { action: 'forget_contact', to: 'زياد' }, 'l7');
   assert.match(reply, /امسح Ziad \(\+971520001111\)؟/);
   reply = await say('لا', null, 'l8');
   assert.match(reply, /ما مسحت شي/);
-  assert.equal(assistant.listOwnerContacts(assistant.ownerKey({ phone: '+963944555666' })).length, 2);
+  assert.equal(assistant.listOwnerContacts(assistant.ownerKey({ phone: '+963944555666' })).length, 3);
   assert.equal(sent.filter((m) => m.to !== lina.externalId).length, 0);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
