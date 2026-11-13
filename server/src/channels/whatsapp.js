@@ -6,7 +6,7 @@ import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFile
 import { DATA_DIR } from '../config.js';
 import { getSetting } from '../settings.js';
 import { handleIncoming, registerSender } from '../inbox.js';
-import { handleVoiceNote } from '../voice.js';
+import { handleVoiceNote, handleImage } from '../voice.js';
 import { isTeamNumber, registerWhatsAppSender } from '../handoff.js';
 
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp-auth');
@@ -109,6 +109,14 @@ export async function startWhatsApp(onChange) {
         downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: socket.updateMediaMessage })
           .then((buffer) => handleVoiceNote({ ...sender, buffer, ext: 'ogg', duration: audio.seconds }))
           .catch((err) => console.error('[whatsapp] Voice note failed:', err.message));
+        continue;
+      }
+      // A photo, or a picture sent as a file.
+      const picture = inner?.imageMessage || (inner?.documentMessage?.mimetype?.startsWith('image/') ? inner.documentMessage : null);
+      if (picture) {
+        downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: socket.updateMediaMessage })
+          .then((buffer) => handleImage({ ...sender, buffer, caption: picture.caption || '' }))
+          .catch((err) => console.error('[whatsapp] Photo failed:', err.message));
         continue;
       }
       const text = textOf(m.message);

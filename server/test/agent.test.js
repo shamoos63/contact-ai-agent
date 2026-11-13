@@ -776,3 +776,88 @@ test('assistant: a message sent while another is being handled is answered for w
   assert.deepEqual(sent, ['📇 Saved Ali: +971500000001.', '📇 Saved Omar: +971500000002.']);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('photos: customers get answers about what the photo shows, and the team sees it', async () => {
+  const { default: sharp } = await import('sharp');
+  const { handleImage } = await import('../src/voice.js');
+  const { visionAnswers, lastVision } = await import('./mock-ollama.js');
+  const big = await sharp({ create: { width: 3000, height: 1500, channels: 3, background: 'red' } }).png().toBuffer();
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  visionAnswers.push('A red iPhone with a cracked screen. Text: iPhone 15');
+  await handleImage({ channel: 'whatsapp', externalId: '971500000077@s.whatsapp.net', name: 'Lina', handle: '+971500000077', messageId: 'img1', buffer: big, caption: 'بتصلحو هاد؟' });
+  await new Promise((r) => setTimeout(r, 300));
+
+  // The vision model got a smaller JPEG and the caption.
+  const img = Buffer.from(lastVision.value.messages[0].images[0], 'base64');
+  const info = await sharp(img).metadata();
+  assert.equal(info.format, 'jpeg');
+  assert.equal(info.width, 1280);
+  assert.match(lastVision.value.messages[0].content, /بتصلحو هاد/);
+  assert.equal(lastVision.value.model, 'qwen2.5vl:7b');
+
+  const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === '971500000077@s.whatsapp.net');
+  const [msg] = mods.inbox.listMessages(conv.id);
+  assert.equal(msg.text, 'بتصلحو هاد؟\n\n[Photo: A red iPhone with a cracked screen. Text: iPhone 15]');
+  const meta = JSON.parse(msg.meta);
+  assert.ok(fs.existsSync(path.join(dataDir, 'media', meta.image)));
+  assert.equal(meta.caption, 'بتصلحو هاد؟');
+  assert.equal(sent.length, 1);
+  // The English description doesn't change the customer's language, and the reply prompt explains photos.
+  assert.equal(mods.agent.detectLanguage([{ role: 'user', content: msg.text }]), 'Arabic');
+  assert.match(mods.agent.buildRulesPrompt(), /\[Photo: …\]/);
+});
+
+test('photos: without the photo model the picture is kept with a note and no AI reply', async () => {
+  const { default: sharp } = await import('sharp');
+  const { handleImage } = await import('../src/voice.js');
+  mods.settings.setSetting('vision', { enabled: true, model: 'missing-vl' });
+  const sent = [];
+  mods.inbox.registerSender('telegram', async (conv, text) => sent.push(text));
+  const png = await sharp({ create: { width: 50, height: 50, channels: 3, background: 'blue' } }).png().toBuffer();
+  await handleImage({ channel: 'telegram', externalId: '991', name: 'Sara', handle: '@sara', messageId: '991:1', buffer: png });
+  await new Promise((r) => setTimeout(r, 200));
+  const conv = mods.inbox.listConversations({ channel: 'telegram' }).find((c) => c.external_id === '991');
+  const msgs = mods.inbox.listMessages(conv.id);
+  assert.equal(msgs[0].text, '📷 Photo');
+  assert.match(msgs[1].text, /photo model missing-vl is not downloaded/);
+  assert.deepEqual(sent, []);
+  mods.settings.setSetting('vision', { enabled: true, model: 'qwen2.5vl:7b' });
+});
+
+test('photos: the assistant reads a business card, saves the number from it, and learns a price list', async () => {
+  const { default: sharp } = await import('sharp');
+  const { handleImage } = await import('../src/voice.js');
+  const { visionAnswers } = await import('./mock-ollama.js');
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'P', phone: '+963944121314' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  const owner = { channel: 'whatsapp', externalId: '963944121314@s.whatsapp.net', handle: '+963944121314', convMeta: { phone: '+963944121314' }, autoReply: false };
+  const png = await sharp({ create: { width: 80, height: 50, channels: 3, background: 'white' } }).png().toBuffer();
+  const wait = () => new Promise((r) => setTimeout(r, 300));
+
+  // Only a photo: the assistant says what it shows.
+  visionAnswers.push('A business card. Text: Nour Card, Sales Manager, 2026-11-13, +971 55 444 3322, nour@card.ae');
+  await handleImage({ ...owner, buffer: png, messageId: 'card1' });
+  await wait();
+  assert.match(sent.at(-1), /^About the photo: A business card/);
+
+  // "save it as Nour" uses the number from the card, not the date.
+  assistantAnswers.push({ action: 'save_contact', to: 'Nour Card' });
+  mods.inbox.handleIncoming({ ...owner, text: 'save it as Nour', messageId: 'card2' });
+  await wait();
+  assert.equal(sent.at(-1), '📇 Saved Nour Card: +971554443322, nour@card.ae.');
+
+  // A photo with words: the caption decides the language and the request.
+  visionAnswers.push('A price list. Text: Screen repair iPhone 15 - 450 AED');
+  assistantAnswers.push({ action: 'learn', text: 'price list' });
+  await handleImage({ ...owner, buffer: png, caption: 'ضيف هاد للمعرفة', messageId: 'card3' });
+  await wait();
+  assert.match(sent.at(-1), /هاد اللي رح ضيفه:\n\nA price list\. Text: Screen repair iPhone 15 - 450 AED/);
+  mods.inbox.handleIncoming({ ...owner, text: 'نعم', messageId: 'card4' });
+  await wait();
+  assert.match(sent.at(-1), /انضافت للمعرفة/);
+  assert.ok(mods.db.prepare("SELECT 1 FROM kb_sources WHERE title = '📷 A price list'").get());
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

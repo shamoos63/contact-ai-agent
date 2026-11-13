@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge, Mic } from 'lucide-react';
+import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge, Mic, Image as ImageIcon } from 'lucide-react';
 import { getSocket } from '../api.js';
 import { api, formatBytes } from '../api.js';
 import { useEngine } from '../useEngine.js';
@@ -16,7 +16,7 @@ export default function Engine() {
 
   if (!engine || !settings) return <div className="center muted">Loading…</div>;
 
-  const inUse = (name) => [settings.chat_model, settings.embed_model].some((m) => m === name || `${m}:latest` === name);
+  const inUse = (name) => [settings.chat_model, settings.embed_model, settings.vision?.enabled && settings.vision.model].filter(Boolean).some((m) => m === name || `${m}:latest` === name);
   const installed = (name) => engine.installed.some((m) => m.name === name || m.name === `${name}:latest`);
   const downloading = (name) => engine.downloads.some((d) => d.model === name && d.state === 'downloading');
   const totalSize = engine.installed.reduce((s, m) => s + (m.size || 0), 0);
@@ -35,6 +35,7 @@ export default function Engine() {
   const cancel = (model) => act(() => api('/ai/cancel', { method: 'POST', body: { model } }));
   const remove = (model) => confirm(`Delete ${model} from this computer?`) && act(() => api(`/ai/models/${encodeURIComponent(model)}`, { method: 'DELETE' }));
   const use = async (model, kind) => {
+    if (kind === 'vision') return setSettings(await api('/settings', { method: 'PUT', body: { vision: { ...settings.vision, model, enabled: true } } }));
     const key = kind === 'chat' ? 'chat_model' : 'embed_model';
     if (kind === 'embed' && !confirm('Switching the search model re-learns the whole knowledge base. Continue?')) return;
     setSettings(await api('/settings', { method: 'PUT', body: { [key]: model } }));
@@ -116,7 +117,7 @@ export default function Engine() {
             {engine.catalog.map((m) => (
               <tr key={m.name}>
                 <td><strong>{m.name}</strong><div className="small muted">{m.note}</div></td>
-                <td>{m.kind === 'chat' ? 'Writing replies' : 'Knowledge search'}</td>
+                <td>{{ chat: 'Writing replies', embed: 'Knowledge search', vision: 'Reading photos' }[m.kind]}</td>
                 <td>≈ {formatBytes(m.size)}</td>
                 <td className="right nowrap">
                   {installed(m.name) ? (
@@ -136,6 +137,15 @@ export default function Engine() {
       </section>
 
       <VoiceCard />
+
+      <PhotosCard
+        settings={settings}
+        installed={installed(settings.vision.model)}
+        downloading={downloading(settings.vision.model)}
+        online={engine.online}
+        onPull={() => pull(settings.vision.model)}
+        onSave={async (patch) => setSettings(await api('/settings', { method: 'PUT', body: { vision: { ...settings.vision, ...patch } } }))}
+      />
 
       <FilesCard path={engine.modelsPath} />
     </div>
@@ -238,6 +248,33 @@ function SpeedCard({ engine, chatModel }) {
         </table>
       )}
       {tips.map((t) => <div key={t} className="alert warn small">{t}</div>)}
+    </section>
+  );
+}
+
+function PhotosCard({ settings, installed, downloading, online, onPull, onSave }) {
+  const v = settings.vision;
+  return (
+    <section className="card stack">
+      <div className="card-head">
+        <h3><ImageIcon size={16} /> Photos</h3>
+        {v.enabled && (installed ? <Pill tone="ok">Ready</Pill> : downloading ? <Pill tone="warn">Downloading</Pill> : <Pill tone="warn">Model not downloaded</Pill>)}
+      </div>
+      <p className="muted small">
+        Photos from WhatsApp and Telegram (products, screenshots, invoices, business cards) are described by a local vision model, so the AI
+        can answer them and the assistant can save a number from a card. The inbox shows what the AI understood under each photo.
+        The first photo after a pause takes longer while the model loads (about 10 to 30 seconds on a laptop).
+      </p>
+      <label className="switch">
+        <input type="checkbox" checked={!!v.enabled} onChange={(e) => onSave({ enabled: e.target.checked })} />
+        <span>Let the AI read photos</span>
+      </label>
+      {v.enabled && (
+        <div className="row">
+          <span className="grow">Photo model: <strong>{v.model}</strong> <span className="muted small">(change it with "Use this" in Suggested models)</span></span>
+          {!installed && !downloading && <button className="primary" disabled={!online} onClick={onPull}><Download size={14} /> Download</button>}
+        </div>
+      )}
     </section>
   );
 }

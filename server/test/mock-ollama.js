@@ -15,6 +15,9 @@ function vec(text) {
 // Answers the tests queue up for the owner assistant, one per request.
 export const assistantAnswers = [];
 export const lastWebPrompt = { value: '' };
+// What the photo model "sees", one per photo; and the last photo request.
+export const visionAnswers = [];
+export const lastVision = { value: null };
 let mockBase = '';
 
 export function startMockOllama() {
@@ -56,6 +59,11 @@ export function startMockOllama() {
     if (req.url === '/api/embed') return res.end(JSON.stringify({ embeddings: data.input.map(vec) }));
     if (req.url === '/api/chat') {
       await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHAT_DELAY || 0)));
+      if (data.messages.some((m) => m.images?.length)) {
+        lastVision.value = data;
+        if (data.model === 'missing-vl') { res.statusCode = 404; return res.end(JSON.stringify({ error: `model "${data.model}" not found, try pulling it first` })); }
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: visionAnswers.shift() || 'A photo of a red phone.' } }));
+      }
       const system = data.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
       if (system.includes('Below are web pages, numbered.')) {
         lastWebPrompt.value = system;
@@ -67,6 +75,10 @@ export function startMockOllama() {
         const draft = system.match(/^Draft: (.*)$/m)?.[1] || '';
         const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
+      }
+      if (system.includes('They sent you a photo without words')) {
+        const desc = system.split('\n')[1].replace(/^\[Photo:\s*|\]$/g, '');
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: `About the photo: ${desc}` } }));
       }
       if (system.includes('You are the personal assistant of')) {
         if (!data.format) return res.end(JSON.stringify({ message: { role: 'assistant', content: 'no schema' } }));

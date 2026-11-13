@@ -19,6 +19,8 @@ export const DEFAULTS = {
   telegram: { enabled: false, token: '' },
   whatsapp: { enabled: false },
   voice: { enabled: true, model: 'onnx-community/whisper-small', language: 'auto' },
+  // Photos from WhatsApp and Telegram are described by a local vision model, so the AI can answer them.
+  vision: { enabled: true, model: 'qwen2.5vl:7b' },
   // Team handoff: requests the AI passes to a person, grouped by topic (sales, maintenance, ...).
   handoff: {
     enabled: false,
