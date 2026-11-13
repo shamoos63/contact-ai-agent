@@ -1,0 +1,13 @@
+# SearXNG: the free search engine the assistant uses to look things up online.
+# It runs only inside Docker (no port is opened on your computer) and asks Google, Bing,
+# DuckDuckGo, Wikipedia and others for results. No account or API key needed.
+use_default_settings: true
+server:
+  secret_key: "6c6499c621ea91c609e2004561baad888b2fa010639b54b7"
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json

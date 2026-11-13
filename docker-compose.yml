@@ -9,11 +9,14 @@ services:
       # Defaults to the Ollama container; set OLLAMA_URL in .env to use the Ollama app on this computer instead.
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       DATA_DIR: /data
+      # The search engine the assistant uses for online questions (the searxng service below).
+      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
       OLLAMA_MODELS_PATH: the "ollama-models" folder inside your contact-ai-agent project folder
     volumes:
       - ./data:/data
     depends_on:
       - ollama
+      - searxng
 
   ollama:
     image: ollama/ollama:latest
@@ -28,6 +31,15 @@ services:
       OLLAMA_NUM_PARALLEL: 1
       OLLAMA_MAX_LOADED_MODELS: 2
     # For an NVIDIA graphics card, start with docker-compose.gpu.yml as well (see README).
+
+  # Free search engine for the assistant's online questions. Only reachable from inside Docker.
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
 
   # Optional: public HTTPS address for the Facebook/Instagram webhooks.
   # Start with: docker compose --profile tunnel up -d   (then see the logs for the URL)

@@ -64,6 +64,7 @@ export const DEFAULTS = {
     confirm_before_sending: true,
     event_reminder_minutes: 30,
     daily_briefing: '', // e.g. "09:00": a short summary of the day to every owner
+    web_access: true, // owners can search the web, read links and add what they learn to Knowledge (after "yes")
     owners: [], // { name, phone, telegram, enabled }
   },
   meta: {

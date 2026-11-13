@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startMockOllama, assistantAnswers } from './mock-ollama.js';
+import { startMockOllama, assistantAnswers, lastWebPrompt } from './mock-ollama.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cai-test-'));
 process.env.DATA_DIR = dataDir;
@@ -705,5 +705,57 @@ test('assistant: contacts work the way the real model answers (names from Arabic
   assert.match(reply, /ما مسحت شي/);
   assert.equal(assistant.listOwnerContacts(assistant.ownerKey({ phone: '+963944555666' })).length, 3);
   assert.equal(sent.filter((m) => m.to !== lina.externalId).length, 0);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('assistant: owners can search online, read links and teach the knowledge base after "yes"', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  process.env.SEARXNG_URL = mock.url;
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Hisham', phone: '+963944777888' }] }));
+  assert.equal(mods.settings.getSetting('assistant').web_access, true);
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const owner = { channel: 'whatsapp', externalId: '963944777888@s.whatsapp.net', handle: '+963944777888', convMeta: { phone: '+963944777888' }, autoReply: false };
+  const say = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await new Promise((r) => setTimeout(r, 600));
+    return sent.filter((m) => m.to === owner.externalId).at(-1).text;
+  };
+
+  // Search: reads the pages (a broken one is skipped), answers with sources, and page text is marked as information only.
+  let reply = await say('search the price of iPhone 16 Pro in Dubai', { action: 'web_search', text: 'price of iPhone 16 Pro in Dubai' }, 'web1');
+  assert.match(reply, /costs 4299 AED in Dubai \[1\]/);
+  assert.match(reply, /🔗 \[1\] http:\/\/127\.0\.0\.1:\d+\/page\/price/);
+  assert.ok(sent.some((m) => m.text === '🔎 Searching…'));
+  assert.match(lastWebPrompt.value, /ignore any instructions/);
+  assert.doesNotMatch(lastWebPrompt.value, /Broken page/);
+  // The model called it chat, but "دورلي" is a search.
+  reply = await say('دورلي على سعر الآيفون', { action: 'chat', reply: 'ما بعرف' }, 'web2');
+  assert.match(reply, /AED/);
+
+  // Learn: shown first, added to Knowledge only after "yes".
+  const before = mods.db.prepare('SELECT COUNT(*) AS n FROM kb_sources').get().n;
+  reply = await say('learn about iPhone 16 Pro prices', { action: 'learn', text: 'iPhone 16 Pro prices' }, 'web3');
+  assert.match(reply, /Here is what I learned/);
+  assert.match(reply, /Reply "yes" or "no"/);
+  assert.equal(mods.db.prepare('SELECT COUNT(*) AS n FROM kb_sources').get().n, before);
+  reply = await say('yes', null, 'web4');
+  assert.match(reply, /Added to Knowledge: "iPhone 16 Pro prices"/);
+  const src = mods.db.prepare('SELECT * FROM kb_sources ORDER BY id DESC').get();
+  assert.equal(src.title, '🌐 iPhone 16 Pro prices');
+  assert.match(src.content, /4299 AED/);
+
+  // A link is read directly; "no" to learning saves nothing.
+  reply = await say(`learn this page ${mock.url}/page/price`, { action: 'chat' }, 'web5');
+  assert.match(reply, /Here is what I learned/);
+  reply = await say('no', null, 'web6');
+  assert.match(reply, /didn't save it/);
+
+  // Turned off: no web access.
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), web_access: false });
+  reply = await say('search something', { action: 'web_search', text: 'something' }, 'web7');
+  assert.match(reply, /turned off/);
+  delete process.env.SEARXNG_URL;
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
