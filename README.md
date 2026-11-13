@@ -54,7 +54,7 @@ If Ollama is installed directly (not in Docker), its models folder is `%USERPROF
 > ```
 > After checking the models appear on the AI engine page, you can remove the old volume with `docker volume rm contact-ai-agent_ollama`.
 
-> On a Mac, Ollama inside Docker cannot use the Apple GPU. For much faster replies install the [Ollama app for Mac](https://ollama.com/download/mac), run `ollama pull qwen2.5:7b` and `ollama pull bge-m3`, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env`, and start only the dashboard with `docker compose up -d --build --no-deps app`.
+> On a Mac, Ollama inside Docker cannot use the Apple GPU. For much faster replies install the [Ollama app for Mac](https://ollama.com/download/mac), run `ollama pull qwen2.5:7b` and `ollama pull bge-m3`, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env`, and start the search engine and the dashboard with `docker compose up -d searxng && docker compose up -d --build --no-deps app`.
 
 ## Making replies faster
 
@@ -64,7 +64,7 @@ Open **AI engine → Speed**. It shows whether the model runs on the graphics ca
 - **Use the graphics card.** On the processor alone a 7B model can need a minute or more per reply; on a GPU it is a few seconds.
   - *NVIDIA card with Docker:* update the NVIDIA driver, then start with
     `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`
-  - *Windows, easiest and fastest (NVIDIA or AMD):* install the [Ollama app for Windows](https://ollama.com/download/windows), which uses the card automatically. Copy the models into it so nothing downloads again: copy the contents of `ollama-models` into `%USERPROFILE%\.ollama\models`. Then add `OLLAMA_URL=http://host.docker.internal:11434` to `.env` and start only the dashboard with `docker compose up -d --no-deps app` (stop the Docker Ollama first with `docker compose stop ollama`).
+  - *Windows, easiest and fastest (NVIDIA or AMD):* install the [Ollama app for Windows](https://ollama.com/download/windows), which uses the card automatically. Copy the models into it so nothing downloads again: copy the contents of `ollama-models` into `%USERPROFILE%\.ollama\models`. Then add `OLLAMA_URL=http://host.docker.internal:11434` to `.env` and start the search engine and the dashboard with `docker compose up -d searxng && docker compose up -d --no-deps app` (stop the Docker Ollama first with `docker compose stop ollama`).
 - **No graphics card?** Pick the smaller `qwen2.5:3b` on the AI engine page: about twice as fast, with simpler answers.
 - **Give Docker enough memory.** The Speed card shows how much memory Docker can use. `qwen2.5:7b` plus the search model need about 7 GB. On Windows, Docker Desktop gets half of your RAM by default; to give it more, create `%USERPROFILE%\.wslconfig` with
   ```
@@ -141,7 +141,7 @@ Under **Assistant**, turn it on, pick your time zone and add the people who may 
 
 - "Save Nour +971 50 123 4567" / "احفظ رقم نور ‎+971…‎": remembered for that person only (each owner has their own list, also shown and editable on the page). Later "tell Nour…" uses it; when several people match (two Nours, or a saved Nour and a Nour from your chats), the bot lists them and you reply with the number. "My contacts" lists them and "forget Nour" deletes one. Numbers need their country code, so a message never reaches the wrong country.
 
-- **Online**: "search the price of iPhone 16 Pro in Dubai" / "دورلي على…" searches the web and answers with links; send a link and it reads the page. "Learn about …" / "تعلم عن …" (or "learn this" after a search) writes a short note and asks before adding it to Knowledge, so customers only ever hear what you approved. Search uses the free SearXNG container (no account or key; it falls back to DuckDuckGo). Only assistant owners get web access; customers' answers still come only from Knowledge. Turn it off with "Online access" on the page. If you run only the app container, start the search engine once with `docker compose up -d --no-deps searxng`.
+- **Online**: "search the price of iPhone 16 Pro in Dubai" / "دورلي على…" searches the web and answers with links; send a link and it reads the page. "Learn about …" / "تعلم عن …" (or "learn this" after a search) writes a short note and asks before adding it to Knowledge, so customers only ever hear what you approved. Search uses the free SearXNG container (no account or key; it falls back to DuckDuckGo). Only assistant owners get web access; customers' answers still come only from Knowledge. Turn it off with "Online access" on the page. If you run only the app container, start the search engine too with `docker compose up -d searxng` (it restarts by itself after a reboot).
 
 Messages and emails to other people are shown first and only go out after the owner replies **yes** (or **نعم / تمام / ابعت**); **no** cancels. You can turn this check off. An optional **daily summary** time sends each owner today's numbers (new chats, customer messages, requests passed to the team) and what's scheduled. Everything waiting shows in the **Coming up** list on the page, where it can be cancelled. Times are understood in the time zone you pick, so the server running in UTC doesn't matter. If the computer was off when something was due, it is sent as soon as the app is back, marked late.
 

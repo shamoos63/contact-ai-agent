@@ -759,3 +759,20 @@ test('assistant: owners can search online, read links and teach the knowledge ba
   delete process.env.SEARXNG_URL;
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('assistant: a message sent while another is being handled is answered for what it said', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Q', phone: '+963944999000' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push(text));
+  const owner = { channel: 'whatsapp', externalId: '963944999000@s.whatsapp.net', handle: '+963944999000', convMeta: { phone: '+963944999000' }, autoReply: false };
+  process.env.MOCK_CHAT_DELAY = '150';
+  // The model gives no name, so each name has to come from that message's own text.
+  assistantAnswers.push({ action: 'save_contact', to: null }, { action: 'save_contact', to: null });
+  mods.inbox.handleIncoming({ ...owner, text: 'save Ali +971500000001', messageId: 'queue1' });
+  mods.inbox.handleIncoming({ ...owner, text: 'save Omar +971500000002', messageId: 'queue2' });
+  await new Promise((r) => setTimeout(r, 900));
+  delete process.env.MOCK_CHAT_DELAY;
+  assert.deepEqual(sent, ['📇 Saved Ali: +971500000001.', '📇 Saved Omar: +971500000002.']);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

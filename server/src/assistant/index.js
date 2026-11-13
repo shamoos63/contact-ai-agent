@@ -180,8 +180,8 @@ function systemPrompt(owner, language) {
 
 async function understand(conv, owner, language, text) {
   const history = db
-    .prepare("SELECT direction, text FROM messages WHERE conversation_id = ? AND direction <> 'note' AND error IS NULL ORDER BY id DESC LIMIT 5")
-    .all(conv.id)
+    .prepare("SELECT direction, text FROM messages WHERE conversation_id = ? AND id <= ? AND direction <> 'note' AND error IS NULL ORDER BY id DESC LIMIT 5")
+    .all(conv.id, conv.meta.currentMessageId || Number.MAX_SAFE_INTEGER)
     .reverse()
     .map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text }));
   const raw = await chat([{ role: 'system', content: systemPrompt(owner, language) }, ...history], { temperature: 0, format: SCHEMA });
@@ -770,17 +770,22 @@ const firstWord = (text) => String(text || '').trim().toLowerCase().replace(/[.!
 const BARE_NUMBER = /^\s*#?[\d٠-٩]{1,2}\s*$/;
 
 let chain = Promise.resolve();
-export function handleOwnerMessage(conversationId) {
-  const run = chain.then(() => processOwnerMessage(conversationId));
+// Messages are handled one at a time, each with its own text: a message sent while a slow search
+// runs waits its turn and is then answered for what it said.
+export function handleOwnerMessage(conversationId, messageId = null) {
+  const run = chain.then(() => processOwnerMessage(conversationId, messageId));
   chain = run.catch((err) => console.error('[assistant]', err));
   return run;
 }
 
-async function processOwnerMessage(conversationId) {
+async function processOwnerMessage(conversationId, messageId = null) {
   const conv = getConversation(conversationId);
   const owner = ownerOf(conv);
   if (!owner) return;
-  const text = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId)?.text || '';
+  const text = (messageId
+    ? db.prepare("SELECT text FROM messages WHERE id = ? AND conversation_id = ?").get(messageId, conversationId)
+    : db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId))?.text || '';
+  conv.meta.currentMessageId = messageId;
   // "1" or "👍" has no language of its own: answer in the language of the owner's last real message.
   const hasWords = /\p{L}{2,}/u.test(text);
   const language = hasWords ? detectLanguage([{ role: 'user', content: text }]) : conv.meta.assistantLanguage || 'English';

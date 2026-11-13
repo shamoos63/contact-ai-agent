@@ -3,6 +3,10 @@
 # DuckDuckGo, Wikipedia and others for results. No account or API key needed.
 use_default_settings: true
 # The secret key comes from SEARXNG_SECRET (see docker-compose.yml), never from this file.
+general:
+  # Wikipedia and Wikidata stay off without a contact address. Any address works; it is only
+  # sent to those sites so they know who is asking.
+  contact_url: https://github.com/shamoos63/contact-ai-agent
 server:
   limiter: false
   image_proxy: false
