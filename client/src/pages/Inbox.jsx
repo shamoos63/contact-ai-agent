@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Search, Send, Bot, UserRound, MessageSquare, Mic, UsersRound } from 'lucide-react';
+import { Search, Send, Bot, UserRound, MessageSquare, Mic, UsersRound, Image as ImageIcon } from 'lucide-react';
 import { api, getSocket, CHANNELS, timeAgo, formatTime } from '../api.js';
 import { Avatar, ChannelTag } from '../components/ui.jsx';
 
@@ -219,6 +219,20 @@ function Conversation({ id }) {
 
 function Bubble({ m }) {
   const meta = typeof m.meta === 'string' ? JSON.parse(m.meta || '{}') : m.meta || {};
+  if (meta.image) {
+    const seen = m.text.match(/\[Photo: ([\s\S]*)\]$/)?.[1];
+    return (
+      <div className="bubble photo">
+        <a href={`/api/media/${meta.image}`} target="_blank" rel="noreferrer"><img src={`/api/media/${meta.image}`} alt="" loading="lazy" /></a>
+        {meta.caption && <div dir="auto">{meta.caption}</div>}
+        <div className="voice-text small" dir="auto">
+          <ImageIcon size={13} />
+          {seen ? <span className="muted" title="What the AI understood from the photo">{seen}</span>
+            : <span className="muted">{meta.imageError === 'off' ? 'Photos are not read by the AI' : 'Could not read this photo'}</span>}
+        </div>
+      </div>
+    );
+  }
   if (!meta.audio) return <div className="bubble" dir="auto">{m.text}</div>;
   return (
     <div className="bubble voice">

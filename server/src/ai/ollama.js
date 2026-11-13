@@ -64,6 +64,23 @@ export function chat(messages, { temperature, format } = {}) {
   });
 }
 
+// Ask a vision model about one image (base64). Queued with the chat model so they don't compete.
+// The vision model is unloaded after a few idle minutes to leave memory for the chat model.
+export function look(prompt, image, { model, timeoutMs = 300000 } = {}) {
+  return enqueue(async () => {
+    const started = Date.now();
+    const data = await call('/api/chat', {
+      model,
+      messages: [{ role: 'user', content: prompt, images: [image] }],
+      stream: false,
+      keep_alive: '10m',
+      options: { temperature: 0.1, num_ctx: 8192 },
+    }, { timeoutMs });
+    console.log(`[ollama] Photo described by ${model} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    return data.message?.content?.trim() || '';
+  });
+}
+
 export async function embed(texts) {
   const input = Array.isArray(texts) ? texts : [texts];
   const out = [];
@@ -112,6 +129,9 @@ export const CATALOG = [
   { name: 'qwen2.5:14b', kind: 'chat', size: 9.0e9, note: 'Better answers, needs a strong GPU or 16 GB+ RAM.' },
   { name: 'aya-expanse:8b', kind: 'chat', size: 5.1e9, note: 'Strong in Arabic and other languages.' },
   { name: 'llama3.1:8b', kind: 'chat', size: 4.9e9, note: 'Good English, average Arabic.' },
+  { name: 'qwen2.5vl:7b', kind: 'vision', size: 6.0e9, note: 'Recommended for photos. Reads Arabic and English text in pictures, screenshots and invoices. Needs 16 GB RAM.' },
+  { name: 'qwen2.5vl:3b', kind: 'vision', size: 3.2e9, note: 'Smaller photo model for 8 GB machines. Reads text less reliably.' },
+  { name: 'gemma3:4b', kind: 'vision', size: 3.3e9, note: 'Light photo model. Good at describing pictures, weaker at Arabic text in them.' },
   { name: 'bge-m3', kind: 'embed', size: 1.2e9, note: 'Recommended. Multilingual search for the knowledge base.' },
   { name: 'nomic-embed-text', kind: 'embed', size: 0.27e9, note: 'Small and fast, English only.' },
 ];
@@ -142,6 +162,7 @@ export async function status() {
       models: installed.map((m) => m.name),
       chatModelReady: has(getSetting('chat_model')),
       embedModelReady: has(getSetting('embed_model')),
+      visionModelReady: has(getSetting('vision').model),
     };
   } catch (err) {
     return { ...base, online: false, error: err.message, installed: [], models: [] };

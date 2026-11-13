@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Bot } from 'grammy';
 import { getSetting } from '../settings.js';
 import { handleIncoming, registerSender } from '../inbox.js';
-import { handleVoiceNote } from '../voice.js';
+import { handleVoiceNote, handleImage } from '../voice.js';
 
 let bot = null;
 let state = { status: 'disabled', username: null, error: null };
@@ -43,6 +43,19 @@ export async function startTelegram(onChange) {
         const ext = path.extname(file.file_path || '').slice(1) || 'ogg';
         await handleVoiceNote({ ...sender, buffer: Buffer.from(await res.arrayBuffer()), ext, duration: voice.duration });
       })().catch((err) => console.error('[telegram] Voice note failed:', err.message));
+      return;
+    }
+    // A photo (Telegram sends several sizes; take the largest up to ~1280 px), or a picture sent as a file.
+    const doc = ctx.message.document?.mime_type?.startsWith('image/') ? ctx.message.document : null;
+    if (ctx.message.photo?.length || doc) {
+      (async () => {
+        const sizes = ctx.message.photo || [];
+        const pick = doc || sizes.filter((p) => Math.max(p.width, p.height) <= 1600).pop() || sizes[0];
+        const file = await ctx.api.getFile(pick.file_id);
+        const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
+        if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+        await handleImage({ ...sender, buffer: Buffer.from(await res.arrayBuffer()), caption: ctx.message.caption || '' });
+      })().catch((err) => console.error('[telegram] Photo failed:', err.message));
       return;
     }
     const text = ctx.message.text || ctx.message.caption;

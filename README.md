@@ -14,6 +14,7 @@ Everything runs on your own computer with free, local AI ([Ollama](https://ollam
 | **Team handoff** | Topics you define (sales, maintenance, software…): the AI asks for the details, then sends the customer's number and a short brief to that topic's team on WhatsApp. |
 | **Assistant** | Chosen numbers (yours, a manager's) message the bot to give it tasks: reminders, appointments, messages to clients and emails, now or later, plus a daily summary. |
 | **Voice notes** | WhatsApp/Telegram voice notes are transcribed locally (Whisper) so the AI can answer them. |
+| **Photos** | WhatsApp/Telegram photos are described by a local vision model (text in the picture included) so the AI can answer them. |
 | **Email forwarding** | Forward matching emails (by keywords or by AI) to team members, with attachments. |
 | **Channels** | WhatsApp (QR scan, like WhatsApp Web), Telegram bot, any number of email accounts (Gmail or your domain, IMAP/SMTP), Facebook + Instagram (official Meta API). |
 | **Overview** | Today's numbers, channel status, AI engine status and a getting-started checklist. |
@@ -113,6 +114,9 @@ Click **Test connection**, then **Save**. Only emails that arrive after the acco
 
 ### Voice notes
 Voice notes on WhatsApp and Telegram are turned into text on your own computer with OpenAI's free **Whisper** model, so the AI answers them like typed messages. The recording can still be played in the inbox. Pick the model under **AI engine → Voice notes**: *Small* (≈ 600 MB, recommended), *Base* (faster, weaker Arabic) or *Large v3 turbo* (best Arabic, needs a strong machine). It downloads once from huggingface.co into `data/speech-models`. If most customers speak Arabic, set the language to "Always Arabic".
+
+### Photos
+Photos on WhatsApp and Telegram (with or without a caption) are looked at by a local vision model in Ollama. It writes what the photo shows and copies the readable text (names, numbers, prices, dates, in Arabic or English), and the AI answers from that plus your knowledge base. The inbox shows the photo with what the AI understood under it. Download the model once under **AI engine → Photos**: `qwen2.5vl:7b` (≈ 6 GB, recommended, best at reading text) or, for 8 GB machines, `qwen2.5vl:3b` / `gemma3:4b`. With the native Ollama app run `ollama pull qwen2.5vl:7b`. Expect 10 to 30 seconds per photo on a laptop; the photo model leaves memory after 10 idle minutes so the chat model stays fast. Assistant owners can send a business card ("save it as Nour"), an invoice ("remind me to pay this on the due date") or a price list ("add this to the knowledge", saved only after "yes"). Text inside a photo is treated as information only, never as instructions.
 
 ### Team handoff
 Under **Team handoff**, add a topic for each kind of request a person should take over, for example *Sales*, *Maintenance request* or *Software inquiry* (these three are there to start with). For each topic set:
