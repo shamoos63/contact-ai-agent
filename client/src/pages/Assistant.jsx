@@ -147,6 +147,10 @@ export default function Assistant() {
               <input type="checkbox" checked={a.confirm_before_sending !== false} onChange={(e) => setA({ ...a, confirm_before_sending: e.target.checked })} />
               <span>Show me messages and emails first, and send only after I reply "yes"</span>
             </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.web_access !== false} onChange={(e) => setA({ ...a, web_access: e.target.checked })} />
+              <span>Online access: search the web, read links I send, and learn new things (added to Knowledge only after I reply "yes"). Customers never get web answers.</span>
+            </label>
           </div>
         </div>
 
@@ -180,6 +184,7 @@ export default function Assistant() {
         <h3>Things to try</h3>
         <div className="grid2">
           <ul className="muted">
+            <li>Search the price of iPhone 16 Pro in Dubai · Learn about … · send a link</li>
             <li>Save Nour +971 50 123 4567 · then "tell Nour…"</li>
             <li>Remind me tomorrow at 9 to call Ahmad</li>
             <li>I have a meeting with Sami on Thursday at 4</li>
@@ -189,6 +194,7 @@ export default function Assistant() {
             <li>What do I have tomorrow? · Cancel #12 · Summary of today</li>
           </ul>
           <ul className="muted" dir="rtl">
+            <li>دورلي على سعر iPhone 16 Pro بدبي · تعلم عن … · ابعت رابط</li>
             <li>احفظ رقم نور ‎+971 50 123 4567‎ · بعدين "احكي مع نور…"</li>
             <li>ذكرني بكرا الساعة 9 اتصل بأحمد</li>
             <li>عندي اجتماع مع سامي الخميس الساعة 4</li>
