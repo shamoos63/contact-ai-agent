@@ -40,6 +40,9 @@ services:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       SEARXNG_BASE_URL: http://searxng:8080/
+      # Signs SearXNG's own cookies only; it guards nothing here because no port is opened.
+      # Set SEARXNG_SECRET in .env to use your own value.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-contact-ai-agent-local-search}
 
   # Optional: public HTTPS address for the Facebook/Instagram webhooks.
   # Start with: docker compose --profile tunnel up -d   (then see the logs for the URL)

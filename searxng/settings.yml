@@ -2,8 +2,8 @@
 # It runs only inside Docker (no port is opened on your computer) and asks Google, Bing,
 # DuckDuckGo, Wikipedia and others for results. No account or API key needed.
 use_default_settings: true
+# The secret key comes from SEARXNG_SECRET (see docker-compose.yml), never from this file.
 server:
-  secret_key: "6c6499c621ea91c609e2004561baad888b2fa010639b54b7"
   limiter: false
   image_proxy: false
 search:
