@@ -73,10 +73,10 @@ export function handleIncoming({ channel, accountId, externalId, name, handle, s
      WHERE c.channel = ? AND m.external_id = ? AND m.direction = 'in'`).get(channel, String(messageId))) return null;
 
   const conversationId = upsertConversation({ channel, accountId, externalId, name, handle, subject, meta: convMeta });
-  insertMessage({ conversationId, direction: 'in', sender: 'customer', text: text.trim(), externalId: messageId, meta });
+  const stored = insertMessage({ conversationId, direction: 'in', sender: 'customer', text: text.trim(), externalId: messageId, meta });
   // Numbers chosen under Assistant give the bot tasks instead of getting customer answers.
   if ((channel === 'whatsapp' || channel === 'telegram') && !meta?.transcribeError && isOwnerConversation(conversationId)) {
-    handleOwnerMessage(conversationId).catch(() => {});
+    handleOwnerMessage(conversationId, stored.id).catch(() => {});
     return conversationId;
   }
   if (autoReply) scheduleAutoReply(conversationId);
