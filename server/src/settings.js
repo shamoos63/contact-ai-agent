@@ -23,8 +23,19 @@ export const DEFAULTS = {
   vision: { enabled: true, model: 'qwen2.5vl:7b' },
   // Daily copy of the database and WhatsApp login into data/backups (local time of the assistant's time zone).
   backup: { enabled: true, time: '03:00', keep: 7 },
+  // Customers who asked about prices or buying and went quiet. mode: 'remind_me' (tell the first
+  // owner, who can say yes to send) or 'send' (send the follow-up by itself). Only 09:00–21:00.
+  followups: {
+    enabled: true,
+    mode: 'remind_me',
+    hours: 24,
+    message_en: 'Hi {name}! Just checking in on your question. Is there anything else I can help you with?',
+    message_ar: 'مرحبا {name}! حبيت اطمن إذا لقيت كل اللي بدك ياه بخصوص سؤالك. في شي تاني فيني ساعدك فيه؟',
+  },
+  // Short notes per customer (name, what they want, preferences), used in the next replies.
+  customer_memory: { enabled: true },
   // Weekly self-review: the AI reads the week's chats and proposes what to learn (owner approves).
-  self_review: { enabled: true, day: 'Sunday', time: '10:00' },
+  self_review: { enabled: true, day: 'Sunday', time: '10:00', report: true },
   // The AI's own voice (Piper). For owners and customers: 'off', 'mirror' (answer a voice note with
   // a voice note) or 'always'. also_text: send the written reply too.
   speak: { enabled: false, voice_en: 'en_GB-alan-medium', voice_ar: 'ar_JO-kareem-medium', owners: 'mirror', customers: 'off', also_text: true, speed: 1 },

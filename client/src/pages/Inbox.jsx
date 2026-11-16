@@ -182,6 +182,7 @@ function Conversation({ id }) {
           <button onClick={toggleStatus}>{conv.status === 'open' ? 'Close' : 'Reopen'}</button>
         </div>
       </header>
+      {conv.meta?.profile && <div className="profile-notes small pre" dir="auto" title="What the AI remembers about this customer">🧠 {conv.meta.profile}</div>}
       <div className="messages">
         {messages.map((m) => m.direction === 'note' ? (
           <div key={m.id} className="note" dir="auto">{m.text} · {formatTime(m.created_at)}</div>

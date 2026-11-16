@@ -168,14 +168,18 @@ function SavedContacts() {
   );
 }
 
+// The assistant page also edits a few settings kept under their own keys.
+const EXTRAS = ['followups', 'customer_memory', 'self_review'];
+
 export default function Assistant() {
   const [a, setA] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [showAll, setShowAll] = useState(false);
   const [msg, setMsg] = useState('');
+  const withExtras = (s) => setA({ ...s.assistant, ...Object.fromEntries(EXTRAS.map((k) => [k, s[k]])) });
 
   useEffect(() => {
-    api('/settings').then((s) => setA(s.assistant));
+    api('/settings').then(withExtras);
   }, []);
   useEffect(() => {
     const load = () => api(`/assistant/tasks${showAll ? '' : '?status=pending'}`).then(setTasks);
@@ -193,7 +197,9 @@ export default function Assistant() {
   const save = async (e) => {
     e.preventDefault();
     if (a.enabled && !owners.some((o) => o.enabled !== false && (o.phone || o.telegram))) return setMsg('⚠ Add at least one number or Telegram username');
-    setA((await api('/settings', { method: 'PUT', body: { assistant: a } })).assistant);
+    const extras = Object.fromEntries(EXTRAS.map((k) => [k, a[k]]));
+    if (extras.followups) extras.followups = { ...extras.followups, hours: Math.max(2, Number(extras.followups.hours) || 24) };
+    withExtras(await api('/settings', { method: 'PUT', body: { assistant: a, ...extras } }));
     setMsg('✓ Saved');
     setTimeout(() => setMsg(''), 2000);
   };
@@ -244,6 +250,44 @@ export default function Assistant() {
               <input type="checkbox" checked={a.alerts !== false} onChange={(e) => setA({ ...a, alerts: e.target.checked })} />
               <span>Tell me right away about complaints, refunds and cancellations</span>
             </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.followups?.enabled !== false} onChange={(e) => setA({ ...a, followups: { ...a.followups, enabled: e.target.checked } })} />
+              <span>Follow up with customers who asked about prices and went quiet</span>
+            </label>
+            {a.followups?.enabled !== false && (
+              <div className="row">
+                <label>
+                  After (hours)
+                  <input type="number" min="2" max="168" value={a.followups?.hours ?? 24} onChange={(e) => setA({ ...a, followups: { ...a.followups, hours: e.target.value } })} />
+                </label>
+                <label className="grow">
+                  How
+                  <select value={a.followups?.mode || 'remind_me'} onChange={(e) => setA({ ...a, followups: { ...a.followups, mode: e.target.value } })}>
+                    <option value="remind_me">Ask me first (I reply "yes")</option>
+                    <option value="send">Send the follow-up by itself</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            <label className="switch">
+              <input type="checkbox" checked={a.customer_memory?.enabled !== false} onChange={(e) => setA({ ...a, customer_memory: { enabled: e.target.checked } })} />
+              <span>Remember customers: short notes (name, what they want, preferences) used in later replies and shown in the inbox</span>
+            </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.self_review?.enabled !== false} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, enabled: e.target.checked } })} />
+              <span>Every week, send me a business report and what the AI wants to learn</span>
+            </label>
+            {a.self_review?.enabled !== false && (
+              <div className="row">
+                <label className="grow">
+                  Day
+                  <select value={a.self_review?.day || 'Sunday'} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, day: e.target.value } })}>
+                    {DAYS.map((d) => <option key={d}>{d}</option>)}
+                  </select>
+                </label>
+                <label>At<input type="time" value={a.self_review?.time || '10:00'} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, time: e.target.value } })} /></label>
+              </div>
+            )}
             {a.alerts !== false && (
               <label>
                 Alert words (comma separated)

@@ -107,7 +107,7 @@ export async function answer(messages, { conv = null } = {}) {
   const prompt = [
     // Fixed instructions first, then what changes per message, so the start of the prompt is reused.
     { role: 'system', content: buildRulesPrompt(conv) },
-    { role: 'system', content: buildKnowledgePrompt(knowledge) },
+    { role: 'system', content: buildKnowledgePrompt(knowledge) + (conv?.meta?.profile && getSetting('customer_memory').enabled ? `\n\nNOTES ABOUT THIS CUSTOMER (from earlier chats; use them to be personal, never read them out):\n${conv.meta.profile}` : '') },
     ...messages,
     // A last reminder right before the answer is what keeps small models on track.
     { role: 'system', content: [handoffReminder(conv, topics), `Answer the customer now, in ${language} only.`].filter(Boolean).join('\n') },

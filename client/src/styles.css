@@ -269,3 +269,4 @@ ol { margin: 6px 0 10px; padding-inline-start: 22px; line-height: 1.7; }
 .send-to select { border: 0; background: transparent; padding: 7px 8px 7px 0; min-width: 0; }
 .topic-name { font-size: 16px; font-weight: 600; flex: 1; min-width: 0; }
 .pre { white-space: pre-wrap; }
+.profile-notes { padding: 8px 16px; border-bottom: 1px solid var(--border); color: var(--muted); background: var(--panel); }
