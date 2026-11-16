@@ -3,7 +3,7 @@ import { emit } from './realtime.js';
 import { getSetting } from './settings.js';
 import { generateReply } from './ai/agent.js';
 import { afterReply } from './handoff.js';
-import { isOwnerConversation, handleOwnerMessage } from './assistant/index.js';
+import { isOwnerConversation, handleOwnerMessage, askOwnerAbout, alertOwnerIfUrgent } from './assistant/index.js';
 import { speak, saveVoiceNote } from './ai/tts.js';
 
 const senders = new Map(); // channel -> async (conversation, text) => { externalId? }
@@ -101,7 +101,11 @@ export function handleIncoming({ channel, accountId, externalId, name, handle, s
     handleOwnerMessage(conversationId, stored.id).catch(() => {});
     return conversationId;
   }
-  if (autoReply) scheduleAutoReply(conversationId);
+  if (autoReply) {
+    // Complaints, refunds, cancellations: tell the owner straight away.
+    alertOwnerIfUrgent(conversationId, text.trim()).catch((err) => console.error('[assistant] Alert failed:', err.message));
+    scheduleAutoReply(conversationId);
+  }
   return conversationId;
 }
 
@@ -131,11 +135,13 @@ export function scheduleAutoReply(conversationId) {
 async function autoReply(conversationId, { force = false } = {}) {
   emit('typing', { conversationId, typing: true });
   try {
-    const { reply, sources, tag } = await generateReply(conversationId);
+    const { reply, sources, tag, unsure } = await generateReply(conversationId);
     // A human may have taken over while the model was thinking.
     if (!force && !conversationRow(conversationId).auto_reply) return;
     await sendMessage(conversationId, reply, { sender: 'ai', voice: wantsVoice(conversationId, 'customer'), meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })) } });
     afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
+    // The AI didn't know: ask the owner, who can answer by chat (sent to the customer and remembered).
+    if (unsure && !tag) askOwnerAbout(conversationId).catch((err) => console.error('[assistant] Asking the owner failed:', err.message));
   } finally {
     emit('typing', { conversationId, typing: false });
   }

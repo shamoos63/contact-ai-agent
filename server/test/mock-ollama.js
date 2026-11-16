@@ -76,6 +76,10 @@ export function startMockOllama() {
         const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
       }
+      if (system.includes('You write WhatsApp replies for')) {
+        const facts = system.match(/Owner's answer \(facts to use\): «([^»]*)»/)[1];
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: `Yes! ${facts}.` } }));
+      }
       if (system.includes('They sent you a photo without words')) {
         const desc = system.split('\n')[1].replace(/^\[Photo:\s*|\]$/g, '');
         return res.end(JSON.stringify({ message: { role: 'assistant', content: `About the photo: ${desc}` } }));
@@ -114,6 +118,9 @@ export function startMockOllama() {
           // Written the way small models often do: with the topic's name instead of its id.
           return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Sorry to hear that! Which device is it, what is the problem, and where are you? [ASK: Maintenance request]' } }));
         }
+      }
+      if (/warranty/i.test(lastUser)) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'I am not sure about that. A member of our team will get back to you soon. [UNSURE]' } }));
       }
       if (/what is toptech/i.test(lastUser)) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'TopTech是我们提供最新科技产品的商店。' } }));

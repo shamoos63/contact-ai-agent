@@ -33,7 +33,7 @@ export function activeCategories() {
 }
 
 // Arabic spelling varies a lot in chat (أ/إ/ا, ة/ه, ى/ي, diacritics), so compare a simplified form.
-function simplify(text) {
+export function simplify(text) {
   return String(text || '')
     .toLowerCase()
     .replace(/[\u064B-\u0652\u0640]/g, '')

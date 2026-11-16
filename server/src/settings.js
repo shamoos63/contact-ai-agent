@@ -70,6 +70,9 @@ export const DEFAULTS = {
     event_reminder_minutes: 30,
     daily_briefing: '', // e.g. "09:00": a short summary of the day to every owner
     web_access: true, // owners can search the web, read links and add what they learn to Knowledge (after "yes")
+    ask_when_unsure: true, // when the AI can't answer a customer, ask the first owner; their answer is sent and remembered
+    alerts: true, // complaints, refunds, cancellations: tell the first owner straight away
+    alert_keywords: 'refund, money back, complaint, complain, cancel my order, scam, fraud, lawyer, terrible, worst, angry, استرجاع, ارجاع المصاري, رجعولي, شكوى, اشتكي, بشتكي, نصب, نصابين, احتيال, حرامية, الغي الطلب, الغاء الطلب, محامي, زفت, مقرف',
     owners: [], // { name, phone, telegram, enabled }
   },
   meta: {

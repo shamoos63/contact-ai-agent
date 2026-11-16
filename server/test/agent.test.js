@@ -957,3 +957,57 @@ test('voice: the assistant speaks to its owner, and sends voice notes to others 
   mods.settings.setSetting('speak', { ...mods.settings.getSetting('speak'), enabled: false, owners: 'mirror', also_text: true });
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('owner help: unknown answers are asked to the owner, sent to the customer and remembered; complaints alert the owner', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'H', phone: '+963944616161' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944616161@s.whatsapp.net';
+  const customer = { channel: 'whatsapp', externalId: '971500000099@s.whatsapp.net', name: 'Rana', handle: '+971500000099', convMeta: { phone: '+971500000099' } };
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944616161', convMeta: { phone: '+963944616161' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const toOwner = () => sent.filter((m) => m.to === ownerJid).map((m) => m.text);
+  const toCustomer = () => sent.filter((m) => m.to === customer.externalId).map((m) => m.text);
+
+  // The AI doesn't know: the customer gets the fallback (without the tag) and the owner is asked, even if they never wrote before.
+  mods.inbox.handleIncoming({ ...customer, text: 'How long is the warranty on used phones?', messageId: 'oh1' });
+  await wait();
+  assert.deepEqual(toCustomer(), ['I am not sure about that. A member of our team will get back to you soon.']);
+  assert.match(toOwner().at(-1), /❓ Rana · \+971500000099 asked:\n«How long is the warranty on used phones\?»/);
+
+  // A second unknown question soon after doesn't ask again.
+  mods.inbox.handleIncoming({ ...customer, text: 'And warranty on chargers?', messageId: 'oh2' });
+  await wait();
+  assert.equal(toOwner().length, 1);
+
+  // The owner's plain answer (the model calls it chat) is turned into a reply, shown first, then sent and learned.
+  assistantAnswers.push({ action: 'chat', reply: 'OK' });
+  mods.inbox.handleIncoming({ ...owner, text: '6 months warranty on all used phones', messageId: 'oh3' });
+  await wait();
+  assert.match(toOwner().at(-1), /^💬 Reply to Rana · \+971500000099:\n\nYes! 6 months warranty on all used phones\.\n\nI'll also remember it/);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'oh4' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'Yes! 6 months warranty on all used phones.');
+  assert.match(toOwner().at(-1), /✅ Sent to Rana · \+971500000099, and I'll know it next time/);
+  const src = mods.db.prepare("SELECT * FROM kb_sources WHERE title LIKE '💬 %warranty%'").get();
+  assert.ok(src);
+
+  // Later, the answer isn't mistaken for a new one: a normal chat stays chat.
+  assistantAnswers.push({ action: 'chat', reply: 'Hello!' });
+  mods.inbox.handleIncoming({ ...owner, text: 'hi there', messageId: 'oh5' });
+  await wait();
+  assert.equal(toOwner().at(-1), 'Hello!');
+
+  // An angry customer: the owner hears about it at once, but only once in a while.
+  const before = toOwner().length;
+  mods.inbox.handleIncoming({ ...customer, text: 'هاد نصب! بدي استرجاع المصاري', messageId: 'oh6' });
+  await wait();
+  assert.match(toOwner().at(-1), /🚨 Heads up: Rana · \+971500000099 wrote:\n«هاد نصب! بدي استرجاع المصاري»/);
+  mods.inbox.handleIncoming({ ...customer, text: 'I want a refund', messageId: 'oh7' });
+  await wait();
+  assert.equal(toOwner().length, before + 1);
+  // Short words only match on their own.
+  assert.equal(await assistant.alertOwnerIfUrgent(mods.inbox.listConversations({ channel: 'whatsapp' })[0].id, 'ok'), undefined);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

@@ -3,7 +3,7 @@ import { getSetting } from '../settings.js';
 import { chat } from '../ai/ollama.js';
 import { detectLanguage } from '../ai/agent.js';
 import { getConversation, sendMessage, updateMeta, ensureConversation, wantsVoice } from '../inbox.js';
-import { outboundSenders, teamContacts } from '../handoff.js';
+import { outboundSenders, teamContacts, simplify } from '../handoff.js';
 import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
 import { withoutPhoto, PHOTO_BLOCK } from '../ai/vision.js';
@@ -71,6 +71,9 @@ export function normalizeAssistant(value) {
     event_reminder_minutes: Number.isFinite(minutes) && minutes >= 0 ? Math.round(minutes) : 30,
     daily_briefing: /^\d{1,2}:\d{2}$/.test(briefing) ? briefing.padStart(5, '0') : '',
     web_access: value?.web_access !== false,
+    ask_when_unsure: value?.ask_when_unsure !== false,
+    alerts: value?.alerts !== false,
+    alert_keywords: typeof value?.alert_keywords === 'string' ? value.alert_keywords.trim() : getSetting('assistant').alert_keywords,
     owners,
   };
 }
@@ -120,7 +123,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['answer_customer', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -167,6 +170,7 @@ function systemPrompt(owner, language) {
     '  cancel: cancel a task by its number (#).',
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
+    '  answer_customer: you just asked the owner about a customer\'s question you could not answer, and this message gives the answer. Put the answer in "text".',
     '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
     '  Any request to tell, message or talk to another person ("احكي مع", "قلو", "قلها", "ابعت لـ", "tell", "message") is send_message, never chat.',
     `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
@@ -530,6 +534,14 @@ async function carryOut(action, conv, owner, language) {
     indexSource(id).catch(() => {});
     return say(language, `📚 Added to Knowledge: "${action.title}". You can edit or delete it on the Knowledge page.`, `📚 انضافت للمعرفة: "${action.title}". فيك تعدلها أو تمسحها من صفحة Knowledge.`);
   }
+  if (action.kind === 'answer') {
+    const msg = await sendMessage(action.conversationId, action.text, { sender: 'agent', voice: wantsVoice(action.conversationId, 'customer'), meta: { byAssistant: owner?.name || true } });
+    updateMeta(conv.id, { assistantQuestion: null });
+    if (msg.error) return say(language, `⚠️ Could not send to ${action.label}: ${msg.error}`, `⚠️ ما قدرت ابعت لـ ${action.label}: ${msg.error}`);
+    const id = createSource({ type: 'text', title: `💬 ${action.question.replace(/\s+/g, ' ').slice(0, 80)}`, origin: null, content: `Customer question: ${action.question}\nAnswer: ${action.answer}` });
+    indexSource(id).catch(() => {});
+    return say(language, `✅ Sent to ${action.label}, and I'll know it next time (Knowledge).`, `✅ انبعت لـ ${action.label}، ورح اعرف الجواب المرة الجاية (Knowledge).`);
+  }
   if (action.kind === 'forget') {
     deleteOwnerContact(action.contactId);
     return say(language, `🗑️ Deleted ${action.label}.`, `🗑️ مسحت ${action.label}.`);
@@ -787,6 +799,18 @@ async function act(cmd, conv, owner, language) {
         return `⚠️ ${err.message.startsWith("Couldn't reach") ? say(language, "I couldn't reach the internet. Please try again in a moment.", 'ما قدرت اوصل للإنترنت. جرب كمان شوي.') : err.message}`;
       }
     }
+    case 'answer_customer': {
+      const q = conv.meta.assistantQuestion;
+      const answer = withoutPhoto(cmd.said) || cmd.text;
+      if (!q || !answer) return say(language, 'Which customer question? I have none waiting.', 'أي سؤال؟ ما في سؤال من زبون ناطر.');
+      const customer = getConversation(q.conversationId);
+      if (!customer) return say(language, 'That chat was deleted.', 'هالمحادثة انمسحت.');
+      const text = await customerAnswer(q, answer);
+      const action = { kind: 'answer', conversationId: q.conversationId, label: q.label, text, question: q.question, answer };
+      if (!s.confirm_before_sending) return carryOut(action, conv, owner, language);
+      updateMeta(conv.id, { assistantPending: { action, at: Date.now() } });
+      return `${say(language, `💬 Reply to ${q.label}:`, `💬 الرد على ${q.label}:`)}\n\n${text}\n\n${say(language, 'I\'ll also remember it for next time. Reply "yes" to send or "no" to cancel.', 'ورح احفظ الجواب للمرات الجاية. رد "نعم" للإرسال أو "لا" للإلغاء.')}`;
+    }
     case 'summary':
       return todaySummary(language, conv.id);
     case 'help':
@@ -906,6 +930,11 @@ async function processOwnerMessage(conversationId, messageId = null) {
     }
     if (pending || asked) updateMeta(conversationId, { assistantPending: null, assistantAsked: null });
     const cmd = await understand(conv, owner, language, text);
+    // Right after the assistant asked about a customer's question, a plain answer is the answer to it.
+    const question = conv.meta.assistantQuestion;
+    const open = question && Date.now() - question.at < QUESTION_HOURS * 3600e3;
+    if (!open && cmd.action === 'answer_customer') cmd.action = 'chat';
+    if (open && ['chat', 'help'].includes(cmd.action) && own && lastOutWasQuestion(conversationId)) cmd.action = 'answer_customer';
     const out = await act(cmd, getConversation(conversationId), owner, language);
     if (out?.ask) {
       updateMeta(conversationId, { assistantAsked: Date.now() });
@@ -999,4 +1028,92 @@ export function startScheduler() {
   timer = setInterval(() => runDueTasks().catch((err) => console.error('[assistant] Scheduler:', err)), 20e3);
   timer.unref?.();
   runDueTasks().catch(() => {});
+}
+
+// --- Asking and alerting the owner ---
+const QUESTION_HOURS = 12;
+const ALERT_HOURS = 6;
+
+// Where to reach the owner: the first one on the list, in their own chat with the bot.
+function firstOwnerConversation() {
+  const s = assistantSettings();
+  if (!s.enabled) return null;
+  const owners = (s.owners || []).filter((o) => o.enabled !== false);
+  if (!owners.length) return null;
+  const ids = ownerConversationIds();
+  for (const o of owners) {
+    const id = ids.find((i) => ownerKey(ownerOf(getConversation(i))) === ownerKey(o));
+    if (id) return id;
+  }
+  const withPhone = owners.find((o) => digitsOf(o.phone).length >= 7);
+  if (!withPhone) return null;
+  const digits = digitsOf(withPhone.phone);
+  return ensureConversation({ channel: 'whatsapp', externalId: `${digits}@s.whatsapp.net`, name: withPhone.name || null, handle: '+' + digits, convMeta: { phone: '+' + digits } });
+}
+
+const ownerLanguage = (id) => getConversation(id)?.meta?.assistantLanguage || 'English';
+const customerLabel = (c) => [c.contact_name, phoneOf(c) || c.contact_handle].filter(Boolean).join(' · ') || `#${c.id}`;
+
+function lastOutWasQuestion(ownerConvId) {
+  const last = db.prepare("SELECT meta FROM messages WHERE conversation_id = ? AND direction = 'out' ORDER BY id DESC LIMIT 1").get(ownerConvId);
+  return !!JSON.parse(last?.meta || '{}').customerQuestion;
+}
+
+// The owner's answer, written as a reply to the customer in the customer's language.
+async function customerAnswer(q, answer) {
+  const out = await chat([
+    { role: 'system', content: [
+      `You write WhatsApp replies for ${getSetting('company_name')}. A customer asked a question the AI could not answer; the owner gave the answer.`,
+      `Customer's question: «${q.question}»`,
+      `Owner's answer (facts to use): «${answer}»`,
+      `Write a short, friendly reply to the customer in ${q.language}${q.language === 'Arabic' ? ' (simple, polite)' : ''} that answers the question using ONLY the owner's facts. One to three sentences. No greeting line of its own, no signature, never Chinese. Only the reply.`,
+    ].join('\n') },
+  ], { temperature: 0.2 });
+  const clean = String(out || '').replace(/^["«]|["»]$/g, '').trim();
+  return !clean || CJK.test(clean) ? answer : clean;
+}
+
+// The AI couldn't answer this customer: ask the owner, once in a while per chat.
+export async function askOwnerAbout(customerConvId) {
+  const s = assistantSettings();
+  if (!s.enabled || s.ask_when_unsure === false) return;
+  const customer = getConversation(customerConvId);
+  if (!customer || ownerOf(customer)) return;
+  const asked = customer.meta.ownerAskedAt;
+  if (asked && Date.now() - asked < 2 * 3600e3) return;
+  const ownerConv = firstOwnerConversation();
+  if (!ownerConv) return;
+  const rows = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 2").all(customerConvId).reverse();
+  const question = rows.map((r) => r.text).join('\n').slice(-500);
+  if (!question.trim()) return;
+  const language = ownerLanguage(ownerConv);
+  updateMeta(customerConvId, { ownerAskedAt: Date.now() });
+  updateMeta(ownerConv, { assistantQuestion: { conversationId: customerConvId, question, language: detectLanguage([{ role: 'user', content: withoutPhoto(question) }]), label: customerLabel(customer), at: Date.now() } });
+  await sendMessage(ownerConv, say(language,
+    `❓ ${customerLabel(customer)} asked:\n«${question}»\n\nI didn't know the answer. Reply with the answer and I'll send it to them and remember it for next time.`,
+    `❓ ${customerLabel(customer)} سأل:\n«${question}»\n\nما عرفت الجواب. ابعتلي الجواب وأنا ببعتلو ياه وبحفظه للمرات الجاية.`),
+  { sender: 'ai', meta: { assistant: true, customerQuestion: customerConvId } });
+}
+
+// Complaints, refunds, cancellations and angry messages: tell the owner straight away.
+export async function alertOwnerIfUrgent(customerConvId, text) {
+  const s = assistantSettings();
+  if (!s.enabled || s.alerts === false) return;
+  const customer = getConversation(customerConvId);
+  if (!customer || ownerOf(customer)) return;
+  const t = ` ${simplify(withoutPhoto(text)).replace(/[^\p{L}\p{N}\s]/gu, ' ')} `.replace(/\s+/g, ' ');
+  const words = String(s.alert_keywords ?? getSetting('assistant').alert_keywords).split(/[,،\n]/).map((k) => simplify(k).trim()).filter(Boolean);
+  // Short words must stand alone ("سيء" not inside another word); longer ones may be part of a word.
+  const hit = words.find((k) => (k.length <= 4 ? t.includes(` ${k} `) : t.includes(k)));
+  if (!hit) return;
+  const last = customer.meta.ownerAlertedAt;
+  if (last && Date.now() - last < ALERT_HOURS * 3600e3) return;
+  const ownerConv = firstOwnerConversation();
+  if (!ownerConv) return;
+  updateMeta(customerConvId, { ownerAlertedAt: Date.now() });
+  const language = ownerLanguage(ownerConv);
+  await sendMessage(ownerConv, say(language,
+    `🚨 Heads up: ${customerLabel(customer)} wrote:\n«${withoutPhoto(text).slice(0, 400)}»\n\nYou may want to answer them yourself (say "tell … " and I'll send it).`,
+    `🚨 انتبه: ${customerLabel(customer)} كتب:\n«${withoutPhoto(text).slice(0, 400)}»\n\nيمكن لازم ترد عليه بنفسك (قلي "قلو …" وأنا ببعتها).`),
+  { sender: 'ai', voice: speakToOwner(), meta: { assistant: true, alert: customerConvId } });
 }
