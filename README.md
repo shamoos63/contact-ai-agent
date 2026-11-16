@@ -122,6 +122,15 @@ Under **AI engine → The AI's own voice** the AI can answer with voice notes on
 ### When the AI doesn't know, and urgent messages
 With the Assistant on, when the AI can't answer a customer from Knowledge, the first person under **Who can give tasks** gets the question on WhatsApp ("❓ Rana asked: …"). Reply with the answer: the assistant writes it for the customer in their language, shows it to you, sends it after "yes" and saves it to Knowledge so it knows next time. Complaints, refunds, cancellations and angry words (editable list, Arabic and English) are sent to you at once, at most every 6 hours per chat. Both can be turned off on the Assistant page.
 
+### Getting better every week
+Nothing below changes the AI's code, and nothing reaches Knowledge without your "yes".
+- **Learns from your team:** replies your team types in the inbox are read for answers that would help other customers (never one customer's details). Proposals appear under **Knowledge → Suggested by the AI** and in the weekly self-review on WhatsApp ("yes", "no" or numbers like "1 3"). Ask any time with "review yourself" / "راجع حالك".
+- **Skills taught by chat:** "from now on tell customers delivery is free over 500 AED" adds a rule to every customer answer. "every Friday at 5 send me the week's report" / "كل جمعة الساعة 5 …" is a job that runs by itself as if you had sent it (messages still wait for your "yes"). See, pause and delete skills on the Assistant page, or ask "what did I teach you".
+- **Feature requests:** when you ask for something it can't do (post on Instagram, pay a bill…), it says so and adds it to **Things it can't do yet**, with a ready GitHub issue link for the developer.
+- **Follow-ups:** customers who asked about prices or buying and then went quiet for 24 hours are listed to you (between 09:00 and 21:00); say "yes" to send each a short follow-up, or let it send them by itself.
+- **Weekly report:** chats, busiest hours and day, top topics, unanswered questions and quiet leads, every Sunday at 10:00 with the self-review, or ask "weekly report" / "تقرير الأسبوع".
+- **Customer memory:** short notes per customer (name, what they want, preferences) are written when a chat pauses, used in later replies and shown at the top of the chat in the inbox. Ask "what do you know about Rana" / "شو بتعرف عن رنا".
+
 ### Backups
 Every night (03:00 in the assistant's time zone) the database and the WhatsApp login are copied into `data/backups/<date>`; the last 7 are kept. **Settings → Backups** has *Back up now*. To restore, stop the app and copy the files of a backup back into `data`. Keep a copy on another disk too.
 
