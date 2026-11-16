@@ -1310,3 +1310,19 @@ test('catalog: products become knowledge, and their photo goes with answers abou
   assert.ok(catalog.deleteProduct(p.id));
   assert.equal(mods.db.prepare('SELECT 1 FROM kb_sources WHERE id = ?').get(p.source_id), undefined);
 });
+
+test('presence: customers see "typing…" (or "recording…" for voice replies) while the AI answers', async () => {
+  const states = [];
+  mods.inbox.registerPresence('telegram', async (id, kind) => states.push(`${id}:${kind}`), 50);
+  mods.inbox.registerSender('telegram', async () => ({}));
+  mods.inbox.handleIncoming({ channel: 'telegram', externalId: '555000222', name: 'Omar', handle: '@omar', text: 'What are your opening hours?', messageId: 'pr1' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(states[0], '555000222:typing');
+  assert.equal(states.at(-1), '555000222:paused');
+  // A chat the team took over shows nothing while a photo is read.
+  const id = mods.inbox.listConversations({ channel: 'telegram' }).find((c) => c.external_id === '555000222').id;
+  mods.inbox.updateConversation(id, { auto_reply: false });
+  states.length = 0;
+  mods.inbox.showPresenceForIncoming({ channel: 'telegram', externalId: '555000222' })();
+  assert.deepEqual(states, []);
+});
