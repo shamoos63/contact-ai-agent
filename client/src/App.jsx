@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, BookOpen, CornerUpRight, Plug, Cpu, Settings as SettingsIcon, LogOut, Menu, Bot, Forward, UsersRound, CalendarClock } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, BookOpen, CornerUpRight, Plug, Cpu, Settings as SettingsIcon, LogOut, Menu, Bot, Forward, UsersRound, CalendarClock, ShoppingBag } from 'lucide-react';
 import { api, closeSocket, getSocket } from './api.js';
 import { useEngine } from './useEngine.js';
 import Login from './pages/Login.jsx';
 import Overview from './pages/Overview.jsx';
 import Inbox from './pages/Inbox.jsx';
 import Knowledge from './pages/Knowledge.jsx';
+import Catalog from './pages/Catalog.jsx';
 import Redirects from './pages/Redirects.jsx';
 import Channels from './pages/Channels.jsx';
 import Engine from './pages/Engine.jsx';
@@ -63,6 +64,7 @@ function Shell({ user, onLogout }) {
     ['/overview', LayoutDashboard, 'Overview'],
     ['/inbox', MessageSquare, 'Inbox', unread],
     ['/knowledge', BookOpen, 'Knowledge'],
+    ['/catalog', ShoppingBag, 'Catalog'],
     ['/redirects', CornerUpRight, 'Redirects'],
     ['/handoff', UsersRound, 'Team handoff'],
     ['/assistant', CalendarClock, 'Assistant'],
@@ -103,6 +105,7 @@ function Shell({ user, onLogout }) {
           <Route path="/overview" element={<Overview />} />
           <Route path="/inbox/:id?" element={<Inbox />} />
           <Route path="/knowledge" element={<Knowledge />} />
+          <Route path="/catalog" element={<Catalog />} />
           <Route path="/redirects" element={<Redirects />} />
           <Route path="/handoff" element={<Handoff />} />
           <Route path="/assistant" element={<Assistant />} />

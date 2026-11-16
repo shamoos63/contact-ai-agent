@@ -1187,3 +1187,126 @@ test('insights: quiet price askers get a follow-up after "yes", the weekly repor
   assert.match(report, /Top topics:\n- iPhone prices \(about 2 messages\)\n- Delivery/);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('drafts: new topics wait for the owner, their edits teach the style, approved topics go straight out', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'H', phone: '+963944717171' }] }));
+  mods.settings.setSetting('drafts', { enabled: true, approvals: 2, hold_message: true });
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944717171@s.whatsapp.net';
+  const customer = { channel: 'whatsapp', externalId: '971500000177@s.whatsapp.net', name: 'Sami', handle: '+971500000177', convMeta: { phone: '+971500000177' } };
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944717171', convMeta: { phone: '+963944717171' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const toOwner = () => sent.filter((m) => m.to === ownerJid).map((m) => m.text);
+  const toCustomer = () => sent.filter((m) => m.to === customer.externalId).map((m) => m.text);
+  const hours = mods.db.prepare("SELECT id FROM kb_sources WHERE title = 'Opening hours'").get().id;
+  const trust = () => mods.db.prepare('SELECT approvals FROM trust WHERE source_id = ?').get(hours)?.approvals || 0;
+
+  // A topic the owner never approved: the customer is told to hold on, the owner sees the draft.
+  mods.inbox.handleIncoming({ ...customer, text: 'What are your opening hours?', messageId: 'dr1' });
+  await wait();
+  assert.deepEqual(toCustomer(), ['Let me check that for you, one moment please 🙏']);
+  assert.match(toOwner().at(-1), /^✍️ Draft reply to Sami · \+971500000177\nThey asked: «What are your opening hours\?»\n\nWe are open 9am to 6pm\.\n\nReply "yes"/);
+  assert.equal(assistant.listDrafts().length, 1);
+
+  // "yes" sends it as is and counts one approval for that topic.
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'dr2' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'We are open 9am to 6pm.');
+  assert.equal(toOwner().at(-1), '✅ Sent.');
+  assert.equal(trust(), 1);
+
+  // The owner writes their own version: that is sent, kept as an example, and the topic starts over.
+  mods.inbox.handleIncoming({ ...customer, text: 'Are you open on Friday? what hours?', messageId: 'dr3' });
+  await wait();
+  assert.equal(toCustomer().length, 2); // no second hold message within the hour
+  assistantAnswers.push({ action: 'chat', reply: 'OK' });
+  mods.inbox.handleIncoming({ ...owner, text: 'Hey! We open 9 to 6, Saturday to Thursday, closed Fridays 😊', messageId: 'dr4' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'Hey! We open 9 to 6, Saturday to Thursday, closed Fridays 😊');
+  assert.match(toOwner().at(-1), /Sent your version/);
+  assert.equal(trust(), 0);
+  const ex = mods.db.prepare('SELECT * FROM style_examples ORDER BY id DESC').get();
+  assert.equal(ex.final_text, 'Hey! We open 9 to 6, Saturday to Thursday, closed Fridays 😊');
+  assert.equal(ex.ai_text, 'We are open 9am to 6pm.');
+  // The next answers are written with the team's example in front of the model.
+  assert.match(mods.agent.styleExamples('opening hours today?', 'English'), /HOW OUR TEAM ANSWERS[\s\S]*closed Fridays/);
+  assert.equal(mods.agent.styleExamples('ساعات الدوام؟', 'Arabic'), '');
+
+  // After enough approvals in a row the topic is trusted: answers go straight out.
+  for (const [i, q] of ['What are your opening hours on Monday?', 'What are your opening hours this week?'].entries()) {
+    mods.inbox.handleIncoming({ ...customer, text: q, messageId: `dr5${i}` });
+    await wait();
+    assert.match(toOwner().at(-1), /^✍️ Draft reply/);
+    mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: `dr6${i}` });
+    await wait();
+  }
+  assert.equal(trust(), 2);
+  const before = toOwner().length;
+  mods.inbox.handleIncoming({ ...customer, text: 'What are your opening hours tomorrow?', messageId: 'dr7' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'We are open 9am to 6pm.');
+  assert.equal(toOwner().length, before);
+
+  // A team member answering in the inbox replaces the waiting draft.
+  mods.db.prepare('DELETE FROM trust').run();
+  mods.inbox.handleIncoming({ ...customer, text: 'Open on Sunday?', messageId: 'dr8' });
+  await wait();
+  const [d] = assistant.listDrafts();
+  assert.ok(d);
+  assistant.learnFromTeamReply(d.conversation_id, 'Yes, Sunday 9 to 6.');
+  assert.equal(mods.db.prepare('SELECT status FROM drafts WHERE id = ?').get(d.id).status, 'edited');
+  assert.equal(assistant.listDrafts().length, 0);
+
+  // "no" drops a draft without sending anything.
+  mods.inbox.handleIncoming({ ...customer, text: 'Open on holidays?', messageId: 'dr9' });
+  await wait();
+  const n = toCustomer().length;
+  mods.inbox.handleIncoming({ ...owner, text: 'no', messageId: 'dr10' });
+  await wait();
+  assert.equal(toCustomer().length, n);
+  assert.match(toOwner().at(-1), /didn't send it/);
+
+  mods.settings.setSetting('drafts', { enabled: false, approvals: 3, hold_message: true });
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('catalog: products become knowledge, and their photo goes with answers about them', async () => {
+  const catalog = await import('../src/catalog.js');
+  const sharp = (await import('sharp')).default;
+  const png = await sharp({ create: { width: 40, height: 30, channels: 3, background: '#c00' } }).png().toBuffer();
+  const image = await catalog.saveProductImage(png);
+  const p = await catalog.saveProduct({ name: 'iPhone 15 Pro', price: '3,999 AED', description: 'Titanium, 256GB, 1 year warranty', image, in_stock: '1' });
+  const src = mods.db.prepare('SELECT * FROM kb_sources WHERE id = ?').get(p.source_id);
+  assert.equal(src.title, '🛍️ iPhone 15 Pro');
+  assert.match(src.content, /Price: 3,999 AED\nAvailable: yes/);
+  assert.equal(src.status, 'ready');
+
+  const sent = [];
+  mods.inbox.registerSender('telegram', async (conv, text) => sent.push({ kind: 'text', text }));
+  mods.inbox.registerImageSender('telegram', async (conv, img, caption) => sent.push({ kind: 'photo', caption, bytes: img.length }));
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const customer = { channel: 'telegram', externalId: '555000111', name: 'Lina', handle: '@lina' };
+  mods.inbox.handleIncoming({ ...customer, text: 'How much is the iPhone 15 Pro?', messageId: 'ct1' });
+  await wait();
+  assert.deepEqual(sent.map((m) => m.kind), ['text', 'photo']);
+  assert.equal(sent[0].text, 'The iPhone 15 Pro costs 3,999 AED and is in stock.');
+  assert.equal(sent[1].caption, 'iPhone 15 Pro · 3,999 AED');
+  // Not again the same day.
+  mods.inbox.handleIncoming({ ...customer, text: 'Is the iPhone 15 Pro still available?', messageId: 'ct2' });
+  await wait();
+  assert.deepEqual(sent.map((m) => m.kind), ['text', 'photo', 'text']);
+
+  // Out of stock: the knowledge follows.
+  await catalog.saveProduct({ id: p.id, name: 'iPhone 15 Pro', price: '3,999 AED', description: 'Titanium', in_stock: '0' });
+  assert.match(mods.db.prepare('SELECT content FROM kb_sources WHERE id = ?').get(p.source_id).content, /out of stock/);
+  assert.equal(mods.db.prepare('SELECT image FROM products WHERE id = ?').get(p.id).image, image); // photo kept
+  mods.inbox.handleIncoming({ ...customer, text: 'iphone 15 pro?', messageId: 'ct3' });
+  await wait();
+  assert.equal(sent.at(-1).text, 'Sorry, the iPhone 15 Pro is out of stock at the moment.');
+
+  // Deleting removes its knowledge too.
+  assert.ok(catalog.deleteProduct(p.id));
+  assert.equal(mods.db.prepare('SELECT 1 FROM kb_sources WHERE id = ?').get(p.source_id), undefined);
+});

@@ -91,7 +91,28 @@ function Conversation({ id }) {
     api('/settings').then((s) => setTopics((s.handoff?.categories || []).filter((c) => c.enabled !== false && c.team?.length))).catch(() => {});
   }, []);
   const [error, setError] = useState('');
+  const [drafts, setDrafts] = useState([]);
+  const [editing, setEditing] = useState(null); // { id, text }
   const bottom = useRef(null);
+  useEffect(() => {
+    const load = () => api(`/drafts?conversation=${id}`).then(setDrafts).catch(() => {});
+    load();
+    const socket = getSocket();
+    const onDrafts = (d) => d.conversationId === id && load();
+    socket.on('drafts', onDrafts);
+    return () => socket.off('drafts', onDrafts);
+  }, [id]);
+  const decide = async (draft, action, body) => {
+    setError('');
+    try {
+      const r = await api(`/drafts/${draft.id}/${action}`, { method: 'POST', body: body || {} });
+      if (r.error) setError(r.error);
+      setEditing(null);
+      setDrafts((list) => list.filter((d) => d.id !== draft.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   useEffect(() => {
     api(`/conversations/${id}`).then(({ conversation, messages }) => {
@@ -197,6 +218,21 @@ function Conversation({ id }) {
             </div>
           </div>
         ))}
+        {drafts.map((d) => (
+          <div key={`d${d.id}`} className="msg out ai draft">
+            <div className="bubble" dir="auto">
+              <div className="small muted">✍️ Draft, waiting for your OK (not sent yet)</div>
+              {editing?.id === d.id
+                ? <textarea dir="auto" rows={4} value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
+                : <div className="pre">{d.text}</div>}
+              <div className="row small">
+                {editing?.id === d.id
+                  ? <><button className="primary" onClick={() => decide(d, 'send', { text: editing.text })}>Send my version</button><button onClick={() => setEditing(null)}>Cancel</button></>
+                  : <><button className="primary" onClick={() => decide(d, 'send')}>Send</button><button onClick={() => setEditing({ id: d.id, text: d.text })}>Edit</button><button onClick={() => decide(d, 'drop')}>Discard</button></>}
+              </div>
+            </div>
+          </div>
+        ))}
         {typing && <div className="msg out ai"><div className="bubble typing"><span /><span /><span /></div></div>}
         <div ref={bottom} />
       </div>
@@ -226,11 +262,11 @@ function Bubble({ m }) {
       <div className="bubble photo">
         <a href={`/api/media/${meta.image}`} target="_blank" rel="noreferrer"><img src={`/api/media/${meta.image}`} alt="" loading="lazy" /></a>
         {meta.caption && <div dir="auto">{meta.caption}</div>}
-        <div className="voice-text small" dir="auto">
+        {!meta.sent && <div className="voice-text small" dir="auto">
           <ImageIcon size={13} />
           {seen ? <span className="muted" title="What the AI understood from the photo">{seen}</span>
             : <span className="muted">{meta.imageError === 'off' ? 'Photos are not read by the AI' : 'Could not read this photo'}</span>}
-        </div>
+        </div>}
       </div>
     );
   }

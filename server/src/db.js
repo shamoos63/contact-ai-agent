@@ -135,6 +135,43 @@ CREATE TABLE IF NOT EXISTS wishes (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Draft mode: replies on topics the owner hasn't approved enough times yet wait for the owner.
+CREATE TABLE IF NOT EXISTS products (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  price TEXT,
+  description TEXT,
+  image TEXT,
+  in_stock INTEGER NOT NULL DEFAULT 1,
+  source_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL,
+  question TEXT,
+  text TEXT NOT NULL,
+  source_id INTEGER,              -- the Knowledge source the answer came from (its "topic")
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | sent | edited | dropped
+  final_text TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  decided_at TEXT
+);
+-- How many times the owner approved answers from each Knowledge source without changes.
+CREATE TABLE IF NOT EXISTS trust (
+  source_id INTEGER PRIMARY KEY,
+  approvals INTEGER NOT NULL DEFAULT 0
+);
+-- Replies the team corrected or wrote themselves: examples of tone and length for the AI.
+CREATE TABLE IF NOT EXISTS style_examples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_text TEXT NOT NULL,
+  ai_text TEXT,
+  final_text TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 -- Things the AI proposes to learn (from the team's own replies, found in its weekly self-review).
 -- Nothing reaches Knowledge until an owner approves it.
 CREATE TABLE IF NOT EXISTS suggestions (

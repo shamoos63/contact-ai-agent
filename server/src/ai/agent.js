@@ -92,6 +92,28 @@ export async function generateReply(conversationId) {
   return answer(messages, { conv });
 }
 
+// How the team itself answered similar messages (from their corrections), so replies sound like them.
+const words = (t) => new Set(String(t).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 2));
+export function styleExamples(latest, language) {
+  const rows = db.prepare('SELECT * FROM style_examples ORDER BY id DESC LIMIT 200').all();
+  if (!rows.length) return '';
+  const want = words(withoutPhoto(latest));
+  const arabic = language === 'Arabic';
+  const picked = rows
+    .filter((r) => ARABIC.test(r.final_text) === arabic)
+    .map((r, i) => {
+      const have = words(r.customer_text);
+      let shared = 0;
+      for (const w of want) if (have.has(w)) shared++;
+      return { r, score: shared * 10 - i * 0.01 }; // most in common first, then newest
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map(({ r }) => `Customer: «${r.customer_text.slice(0, 200)}»\nOur team answered: «${r.final_text.slice(0, 400)}»`);
+  if (!picked.length) return '';
+  return `\n\nHOW OUR TEAM ANSWERS (real replies; copy their tone, length and wording style, but take facts only from the knowledge above):\n${picked.join('\n\n')}`;
+}
+
 // messages: [{ role: 'user' | 'assistant', content }]; the last one should be from the user.
 export async function answer(messages, { conv = null } = {}) {
   const recentUser = messages.filter((m) => m.role === 'user').slice(-3).map((m) => m.content).join('\n');
@@ -107,7 +129,7 @@ export async function answer(messages, { conv = null } = {}) {
   const prompt = [
     // Fixed instructions first, then what changes per message, so the start of the prompt is reused.
     { role: 'system', content: buildRulesPrompt(conv) },
-    { role: 'system', content: buildKnowledgePrompt(knowledge) + (conv?.meta?.profile && getSetting('customer_memory').enabled ? `\n\nNOTES ABOUT THIS CUSTOMER (from earlier chats; use them to be personal, never read them out):\n${conv.meta.profile}` : '') },
+    { role: 'system', content: buildKnowledgePrompt(knowledge) + styleExamples(latest, language) + (conv?.meta?.profile && getSetting('customer_memory').enabled ? `\n\nNOTES ABOUT THIS CUSTOMER (from earlier chats; use them to be personal, never read them out):\n${conv.meta.profile}` : '') },
     ...messages,
     // A last reminder right before the answer is what keeps small models on track.
     { role: 'system', content: [handoffReminder(conv, topics), `Answer the customer now, in ${language} only.`].filter(Boolean).join('\n') },
