@@ -3,7 +3,7 @@ import { emit } from './realtime.js';
 import { getSetting } from './settings.js';
 import { generateReply } from './ai/agent.js';
 import { afterReply } from './handoff.js';
-import { isOwnerConversation, handleOwnerMessage, askOwnerAbout, alertOwnerIfUrgent } from './assistant/index.js';
+import { isOwnerConversation, handleOwnerMessage, askOwnerAbout, alertOwnerIfUrgent, holdForDraft } from './assistant/index.js';
 import { speak, saveVoiceNote } from './ai/tts.js';
 
 const senders = new Map(); // channel -> async (conversation, text) => { externalId? }
@@ -138,6 +138,8 @@ async function autoReply(conversationId, { force = false } = {}) {
     const { reply, sources, tag, unsure } = await generateReply(conversationId);
     // A human may have taken over while the model was thinking.
     if (!force && !conversationRow(conversationId).auto_reply) return;
+    // Draft mode: an answer on a topic the owner hasn't approved enough yet waits for them.
+    if (!force && !tag && !unsure && await holdForDraft(conversationId, reply, sources)) return;
     await sendMessage(conversationId, reply, { sender: 'ai', voice: wantsVoice(conversationId, 'customer'), meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })), ...(unsure ? { unsure: true } : {}) } });
     afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
     // The AI didn't know: ask the owner, who can answer by chat (sent to the customer and remembered).

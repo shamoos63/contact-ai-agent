@@ -169,7 +169,7 @@ function SavedContacts() {
 }
 
 // The assistant page also edits a few settings kept under their own keys.
-const EXTRAS = ['followups', 'customer_memory', 'self_review'];
+const EXTRAS = ['followups', 'customer_memory', 'self_review', 'drafts'];
 
 export default function Assistant() {
   const [a, setA] = useState(null);
@@ -273,6 +273,22 @@ export default function Assistant() {
               <input type="checkbox" checked={a.customer_memory?.enabled !== false} onChange={(e) => setA({ ...a, customer_memory: { enabled: e.target.checked } })} />
               <span>Remember customers: short notes (name, what they want, preferences) used in later replies and shown in the inbox</span>
             </label>
+            <label className="switch">
+              <input type="checkbox" checked={!!a.drafts?.enabled} onChange={(e) => setA({ ...a, drafts: { ...a.drafts, enabled: e.target.checked } })} />
+              <span>Draft mode: on a topic I haven't approved yet, the AI sends me its answer first (I reply "yes", "no" or my own version) and learns how I answer</span>
+            </label>
+            {a.drafts?.enabled && (
+              <div className="row">
+                <label className="grow">
+                  Trust a topic after this many "yes" in a row
+                  <input type="number" min="1" max="20" value={a.drafts?.approvals ?? 3} onChange={(e) => setA({ ...a, drafts: { ...a.drafts, approvals: Number(e.target.value) } })} />
+                </label>
+                <label className="switch grow">
+                  <input type="checkbox" checked={a.drafts?.hold_message !== false} onChange={(e) => setA({ ...a, drafts: { ...a.drafts, hold_message: e.target.checked } })} />
+                  <span>Tell the customer "one moment" while I decide</span>
+                </label>
+              </div>
+            )}
             <label className="switch">
               <input type="checkbox" checked={a.self_review?.enabled !== false} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, enabled: e.target.checked } })} />
               <span>Every week, send me a business report and what the AI wants to learn</span>

@@ -3,7 +3,7 @@ import multer from 'multer';
 import { db } from '../db.js';
 import { login, changePassword, requireAuth, setSessionCookie, clearSessionCookie } from '../auth.js';
 import { getAllSettings, setSetting, getSetting, SETTING_KEYS } from '../settings.js';
-import { listConversations, listMessages, sendMessage, updateConversation, getConversation, replyNow } from '../inbox.js';
+import { listConversations, listMessages, sendMessage, updateConversation, getConversation, replyNow, updateMeta } from '../inbox.js';
 import { createSource, indexSource, reindexAll, search, invalidateCache } from '../kb/index.js';
 import { extractFile, extractUrl } from '../kb/extract.js';
 import { answer } from '../ai/agent.js';
@@ -15,7 +15,7 @@ import { speechStatus, loadModel } from '../ai/speech.js';
 import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
 import { listBackups, backupNow, BACKUP_DIR } from '../backup.js';
 import { listSuggestions, decideSuggestions, reviewChats } from '../assistant/review.js';
-import { ownerConversationIds } from '../assistant/index.js';
+import { ownerConversationIds, listDrafts, decideDraft, afterDraftDecision, learnFromTeamReply } from '../assistant/index.js';
 import { listSkills, removeSkill, setSkillEnabled, addSkill, listWishes, setWishDone } from '../assistant/skills.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
@@ -62,6 +62,7 @@ api.patch('/conversations/:id', (req, res) => res.json(updateConversation(Number
 api.post('/conversations/:id/messages', wrap(async (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!text) return res.status(400).json({ error: 'Message is empty' });
+  try { learnFromTeamReply(Number(req.params.id), text); } catch (err) { console.warn('[style] Could not keep the example:', err.message); }
   res.json(await sendMessage(Number(req.params.id), text, { sender: 'agent' }));
 }));
 api.post('/conversations/:id/ai-reply', wrap(async (req, res) => {
@@ -279,6 +280,39 @@ api.post('/wishes/:id/done', (req, res) => {
   res.json(listWishes());
 });
 // --- What the AI proposes to learn (approve or reject) ---
+// Draft mode: answers waiting for the owner, and the team's own replies the AI learns its style from.
+api.get('/drafts', (req, res) => res.json(listDrafts(req.query.conversation ? Number(req.query.conversation) : null)));
+api.post('/drafts/:id/send', wrap(async (req, res) => {
+  const r = await decideDraft(Number(req.params.id), { send: true, text: req.body?.text ? String(req.body.text) : null, by: 'dashboard' });
+  if (!r) return res.status(404).json({ error: 'That draft was already handled' });
+  await clearDraftQuestion(Number(req.params.id));
+  res.json({ status: r.status, error: r.error });
+}));
+api.post('/drafts/:id/drop', wrap(async (req, res) => {
+  const r = await decideDraft(Number(req.params.id), { send: false });
+  if (!r) return res.status(404).json({ error: 'That draft was already handled' });
+  await clearDraftQuestion(Number(req.params.id));
+  res.json({ status: r.status });
+}));
+// Decided in the dashboard: the WhatsApp question about it is closed, the next draft is offered.
+async function clearDraftQuestion(draftId) {
+  for (const id of ownerConversationIds()) {
+    const c = getConversation(id);
+    if (c?.meta?.assistantPending?.action?.draftId === draftId) updateMeta(id, { assistantPending: null });
+  }
+  await afterDraftDecision();
+}
+api.get('/style-examples', (req, res) => res.json(db.prepare('SELECT * FROM style_examples ORDER BY id DESC LIMIT 100').all()));
+api.delete('/style-examples/:id', (req, res) => {
+  db.prepare('DELETE FROM style_examples WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+api.get('/trust', (req, res) => res.json(db.prepare('SELECT t.source_id, t.approvals, s.title FROM trust t LEFT JOIN kb_sources s ON s.id = t.source_id ORDER BY t.approvals DESC').all()));
+api.delete('/trust', (req, res) => {
+  db.prepare('DELETE FROM trust').run();
+  res.json({ ok: true });
+});
+
 api.get('/suggestions', (req, res) => res.json(listSuggestions({ status: req.query.status || 'pending' })));
 api.post('/suggestions/review', wrap(async (req, res) => {
   const found = await reviewChats({ ownerConversationIds: ownerConversationIds() });

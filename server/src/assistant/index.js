@@ -20,6 +20,7 @@ import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, 
 
 const digitsOf = (v) => String(v || '').replace(/\D/g, '');
 const CONFIRM_MINUTES = 30;
+const DRAFT_HOURS = 12;
 
 export function assistantSettings() {
   return getSetting('assistant');
@@ -1002,6 +1003,41 @@ async function processOwnerMessage(conversationId, messageId = null) {
       }
     }
     const pending = conv.meta.assistantPending;
+    // A draft reply for a customer is waiting: yes sends it, no drops it, anything that isn't a
+    // command is the owner's own version, sent instead (and learned from).
+    if (pending?.action?.kind === 'draft' && Date.now() - pending.at < DRAFT_HOURS * 3600e3) {
+      const draftId = pending.action.draftId;
+      const word = firstWord(text);
+      const finish = async (body) => {
+        updateMeta(conversationId, { assistantPending: null });
+        await reply(body);
+        await afterDraftDecision();
+      };
+      if (YES.has(word) && text.trim().split(/\s+/).length <= 3) {
+        const r = await decideDraft(draftId, { send: true });
+        return await finish(!r ? say(language, 'That draft was already handled.', 'هالمسودة انحسمت من قبل.')
+          : r.error ? say(language, `⚠️ Could not send it: ${r.error}`, `⚠️ ما قدرت ابعتها: ${r.error}`)
+            : say(language, '✅ Sent.', '✅ انبعتت.'));
+      }
+      if (NO.has(word) && text.trim().split(/\s+/).length <= 3) {
+        await decideDraft(draftId, { send: false });
+        return await finish(say(language, "OK, I didn't send it. The customer is still waiting for an answer, you can reply from the inbox.", 'تمام، ما بعتها. الزبون لسا ناطر جواب، فيك ترد عليه من الـ inbox.'));
+      }
+      if (BARE_NUMBER.test(text)) return await reply(say(language, 'Please reply "yes", "no", or write your own answer.', 'رد "نعم" أو "لا"، أو اكتب جوابك.'));
+      if (own) {
+        const cmd = await understand(conv, owner, language, text);
+        if (['chat', 'help', 'answer_customer'].includes(cmd.action)) {
+          const r = await decideDraft(draftId, { send: true, text: withoutPhoto(text), by: owner?.name || true });
+          return await finish(!r ? say(language, 'That draft was already handled.', 'هالمسودة انحسمت من قبل.')
+            : r.error ? say(language, `⚠️ Could not send it: ${r.error}`, `⚠️ ما قدرت ابعتها: ${r.error}`)
+              : say(language, "✅ Sent your version. I'll answer like that next time.", '✅ بعتت جوابك. المرة الجاية رح جاوب متلو.'));
+        }
+        // Another task in between: do it, the draft stays open.
+        const out = await act(cmd, getConversation(conversationId), owner, language);
+        if (!getConversation(conversationId).meta.assistantPending) updateMeta(conversationId, { assistantPending: pending });
+        return await reply(out?.ask || out);
+      }
+    }
     const pendingFor = ['review', 'followup'].includes(pending?.action?.kind) ? 12 * 60 : CONFIRM_MINUTES;
     if (pending && Date.now() - pending.at < pendingFor * 60e3) {
       const word = firstWord(text);
@@ -1203,6 +1239,8 @@ function background(now) {
       await followUps(now);
     }
     await updateProfiles(now);
+    // A draft that wasn't offered because another question was open.
+    if (getSetting('drafts').enabled && db.prepare("SELECT 1 FROM drafts WHERE status = 'pending'").get()) await afterDraftDecision();
   })().catch((err) => console.error('[assistant] Background:', err.message)).finally(() => { busy = false; });
 }
 
@@ -1359,4 +1397,119 @@ export async function alertOwnerIfUrgent(customerConvId, text) {
     `🚨 Heads up: ${customerLabel(customer)} wrote:\n«${withoutPhoto(text).slice(0, 400)}»\n\nYou may want to answer them yourself (say "tell … " and I'll send it).`,
     `🚨 انتبه: ${customerLabel(customer)} كتب:\n«${withoutPhoto(text).slice(0, 400)}»\n\nيمكن لازم ترد عليه بنفسك (قلي "قلو …" وأنا ببعتها).`),
   { sender: 'ai', voice: speakToOwner(), meta: { assistant: true, alert: customerConvId } });
+}
+
+// --- Draft mode ---
+const draftSettings = () => getSetting('drafts');
+const approvalsOf = (sourceId) => (sourceId ? db.prepare('SELECT approvals FROM trust WHERE source_id = ?').get(sourceId)?.approvals || 0 : 0);
+
+// Keep the answer as a draft for the owner? Returns true when it was kept (nothing sent yet).
+export async function holdForDraft(conversationId, reply, sources = []) {
+  const d = draftSettings();
+  if (!d.enabled || !assistantSettings().enabled) return false;
+  const customer = getConversation(conversationId);
+  if (!customer || ownerOf(customer)) return false;
+  const sourceId = sources[0]?.source_id || null;
+  if (sourceId && approvalsOf(sourceId) >= (Number(d.approvals) || 3)) return false; // trusted topic
+  const ownerConv = firstOwnerConversation();
+  if (!ownerConv) return false;
+  const question = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId)?.text || '';
+  // One open draft per chat: a newer answer replaces the older one.
+  db.prepare("UPDATE drafts SET status = 'dropped', decided_at = datetime('now') WHERE conversation_id = ? AND status = 'pending'").run(conversationId);
+  db.prepare('INSERT INTO drafts (conversation_id, question, text, source_id) VALUES (?, ?, ?, ?)').run(conversationId, withoutPhoto(question).slice(0, 500), reply, sourceId);
+  emit('drafts', { conversationId });
+  // Tell the customer we're on it (at most once an hour per chat).
+  if (d.hold_message !== false && Date.now() - (customer.meta.draftHoldAt || 0) > 3600e3) {
+    const language = detectLanguage([{ role: 'user', content: withoutPhoto(question) }]);
+    updateMeta(conversationId, { draftHoldAt: Date.now() });
+    await sendMessage(conversationId, say(language, 'Let me check that for you, one moment please 🙏', 'خليني اتأكدلك من هالشي، لحظة من فضلك 🙏'), { sender: 'ai', meta: { hold: true } });
+  }
+  await offerNextDraft(ownerConv);
+  return true;
+}
+
+export function listDrafts(conversationId = null) {
+  return conversationId
+    ? db.prepare("SELECT * FROM drafts WHERE conversation_id = ? AND status = 'pending' ORDER BY id").all(conversationId)
+    : db.prepare("SELECT * FROM drafts WHERE status = 'pending' ORDER BY id").all();
+}
+
+// Show the owner the oldest waiting draft, unless they're already looking at one.
+async function offerNextDraft(ownerConv) {
+  const open = getConversation(ownerConv).meta.assistantPending;
+  if (open && open.action?.kind === 'draft' && Date.now() - open.at < DRAFT_HOURS * 3600e3
+    && db.prepare("SELECT 1 FROM drafts WHERE id = ? AND status = 'pending'").get(open.action.draftId)) return;
+  if (open && open.action?.kind !== 'draft' && Date.now() - open.at < CONFIRM_MINUTES * 60e3) return; // another question is open
+  const next = db.prepare("SELECT * FROM drafts WHERE status = 'pending' ORDER BY id LIMIT 1").get();
+  if (!next) return;
+  const customer = getConversation(next.conversation_id);
+  const language = ownerLanguage(ownerConv);
+  const waiting = db.prepare("SELECT COUNT(*) AS n FROM drafts WHERE status = 'pending'").get().n;
+  updateMeta(ownerConv, { assistantPending: { action: { kind: 'draft', draftId: next.id }, at: Date.now() } });
+  await sendMessage(ownerConv, [
+    say(language, `✍️ Draft reply to ${customerLabel(customer)}`, `✍️ مسودة رد على ${customerLabel(customer)}`) + (waiting > 1 ? say(language, ` (1 of ${waiting})`, ` (1 من ${waiting})`) : ''),
+    say(language, `They asked: «${next.question}»`, `سأل: «${next.question}»`),
+    '',
+    next.text,
+    '',
+    say(language, 'Reply "yes" to send it, write your own answer to send that instead, or "no" to skip.', 'رد "نعم" لابعتها، أو اكتب جوابك وأنا ببعتو بدالها، أو "لا" لتتجاهلها.'),
+  ].join('\n'), { sender: 'ai', meta: { assistant: true, draft: next.id } });
+}
+
+// The owner's decision on a draft: send it, send their own version instead, or drop it.
+export async function decideDraft(draftId, { send, text = null, by = null }) {
+  const d = db.prepare("SELECT * FROM drafts WHERE id = ? AND status = 'pending'").get(draftId);
+  if (!d) return null;
+  let status = 'dropped';
+  let msg = null;
+  const own = text && text.trim() && text.trim() !== d.text.trim() ? text.trim() : null;
+  if (send) {
+    msg = await sendMessage(d.conversation_id, own || d.text, { sender: own ? 'agent' : 'ai', voice: wantsVoice(d.conversation_id, 'customer'), meta: own ? { byAssistant: by || true, fromDraft: d.id } : { fromDraft: d.id } });
+    status = own ? 'edited' : 'sent';
+    if (d.source_id) {
+      if (own) db.prepare('INSERT INTO trust (source_id, approvals) VALUES (?, 0) ON CONFLICT(source_id) DO UPDATE SET approvals = 0').run(d.source_id);
+      else db.prepare('INSERT INTO trust (source_id, approvals) VALUES (?, 1) ON CONFLICT(source_id) DO UPDATE SET approvals = approvals + 1').run(d.source_id);
+    }
+    if (own && d.question) saveStyleExample(d.question, d.text, own);
+  }
+  db.prepare("UPDATE drafts SET status = ?, final_text = ?, decided_at = datetime('now') WHERE id = ?").run(status, own, d.id);
+  emit('drafts', { conversationId: d.conversation_id });
+  return { draft: d, status, error: msg?.error || null };
+}
+
+export function saveStyleExample(customerText, aiText, finalText) {
+  db.prepare('INSERT INTO style_examples (customer_text, ai_text, final_text) VALUES (?, ?, ?)').run(String(customerText).slice(0, 500), aiText ? String(aiText).slice(0, 800) : null, String(finalText).slice(0, 800));
+  // Keep the newest 200.
+  db.prepare('DELETE FROM style_examples WHERE id NOT IN (SELECT id FROM style_examples ORDER BY id DESC LIMIT 200)').run();
+}
+
+// After the owner decided by chat or in the dashboard, show the next draft.
+export async function afterDraftDecision() {
+  const ownerConv = firstOwnerConversation();
+  if (ownerConv) await offerNextDraft(ownerConv);
+}
+
+// A team member answered in the inbox: their reply replaces any waiting draft, and is kept as an
+// example of how the team answers.
+export function learnFromTeamReply(conversationId, text) {
+  const customer = getConversation(conversationId);
+  if (!customer || ownerOf(customer)) return;
+  const d = db.prepare("SELECT * FROM drafts WHERE conversation_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").get(conversationId);
+  if (d) {
+    db.prepare("UPDATE drafts SET status = 'edited', final_text = ?, decided_at = datetime('now') WHERE conversation_id = ? AND status = 'pending'").run(text, conversationId);
+    if (d.source_id) db.prepare('INSERT INTO trust (source_id, approvals) VALUES (?, 0) ON CONFLICT(source_id) DO UPDATE SET approvals = 0').run(d.source_id);
+    if (d.question) saveStyleExample(d.question, d.text, text);
+    emit('drafts', { conversationId });
+    const ownerConv = firstOwnerConversation();
+    if (ownerConv && getConversation(ownerConv).meta.assistantPending?.action?.draftId === d.id) updateMeta(ownerConv, { assistantPending: null });
+    afterDraftDecision().catch(() => {});
+    return;
+  }
+  // Right after an AI answer, a team reply to the same question shows how they'd say it.
+  const last = db.prepare("SELECT * FROM messages WHERE conversation_id = ? AND direction IN ('in', 'out') ORDER BY id DESC LIMIT 1").get(conversationId);
+  if (!last || last.direction !== 'out' || last.sender !== 'ai' || last.error) return;
+  if (JSON.parse(last.meta || '{}').hold) return;
+  if (Date.now() - new Date(`${last.created_at.replace(' ', 'T')}Z`).getTime() > 15 * 60e3) return;
+  const asked = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' AND id < ? ORDER BY id DESC LIMIT 1").get(conversationId, last.id)?.text;
+  if (asked && withoutPhoto(asked).trim() && text.length >= 10) saveStyleExample(withoutPhoto(asked), last.text, text);
 }

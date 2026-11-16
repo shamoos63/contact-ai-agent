@@ -1187,3 +1187,87 @@ test('insights: quiet price askers get a follow-up after "yes", the weekly repor
   assert.match(report, /Top topics:\n- iPhone prices \(about 2 messages\)\n- Delivery/);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('drafts: new topics wait for the owner, their edits teach the style, approved topics go straight out', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'H', phone: '+963944717171' }] }));
+  mods.settings.setSetting('drafts', { enabled: true, approvals: 2, hold_message: true });
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944717171@s.whatsapp.net';
+  const customer = { channel: 'whatsapp', externalId: '971500000177@s.whatsapp.net', name: 'Sami', handle: '+971500000177', convMeta: { phone: '+971500000177' } };
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944717171', convMeta: { phone: '+963944717171' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const toOwner = () => sent.filter((m) => m.to === ownerJid).map((m) => m.text);
+  const toCustomer = () => sent.filter((m) => m.to === customer.externalId).map((m) => m.text);
+  const hours = mods.db.prepare("SELECT id FROM kb_sources WHERE title = 'Opening hours'").get().id;
+  const trust = () => mods.db.prepare('SELECT approvals FROM trust WHERE source_id = ?').get(hours)?.approvals || 0;
+
+  // A topic the owner never approved: the customer is told to hold on, the owner sees the draft.
+  mods.inbox.handleIncoming({ ...customer, text: 'What are your opening hours?', messageId: 'dr1' });
+  await wait();
+  assert.deepEqual(toCustomer(), ['Let me check that for you, one moment please 🙏']);
+  assert.match(toOwner().at(-1), /^✍️ Draft reply to Sami · \+971500000177\nThey asked: «What are your opening hours\?»\n\nWe are open 9am to 6pm\.\n\nReply "yes"/);
+  assert.equal(assistant.listDrafts().length, 1);
+
+  // "yes" sends it as is and counts one approval for that topic.
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'dr2' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'We are open 9am to 6pm.');
+  assert.equal(toOwner().at(-1), '✅ Sent.');
+  assert.equal(trust(), 1);
+
+  // The owner writes their own version: that is sent, kept as an example, and the topic starts over.
+  mods.inbox.handleIncoming({ ...customer, text: 'Are you open on Friday? what hours?', messageId: 'dr3' });
+  await wait();
+  assert.equal(toCustomer().length, 2); // no second hold message within the hour
+  assistantAnswers.push({ action: 'chat', reply: 'OK' });
+  mods.inbox.handleIncoming({ ...owner, text: 'Hey! We open 9 to 6, Saturday to Thursday, closed Fridays 😊', messageId: 'dr4' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'Hey! We open 9 to 6, Saturday to Thursday, closed Fridays 😊');
+  assert.match(toOwner().at(-1), /Sent your version/);
+  assert.equal(trust(), 0);
+  const ex = mods.db.prepare('SELECT * FROM style_examples ORDER BY id DESC').get();
+  assert.equal(ex.final_text, 'Hey! We open 9 to 6, Saturday to Thursday, closed Fridays 😊');
+  assert.equal(ex.ai_text, 'We are open 9am to 6pm.');
+  // The next answers are written with the team's example in front of the model.
+  assert.match(mods.agent.styleExamples('opening hours today?', 'English'), /HOW OUR TEAM ANSWERS[\s\S]*closed Fridays/);
+  assert.equal(mods.agent.styleExamples('ساعات الدوام؟', 'Arabic'), '');
+
+  // After enough approvals in a row the topic is trusted: answers go straight out.
+  for (const [i, q] of ['What are your opening hours on Monday?', 'What are your opening hours this week?'].entries()) {
+    mods.inbox.handleIncoming({ ...customer, text: q, messageId: `dr5${i}` });
+    await wait();
+    assert.match(toOwner().at(-1), /^✍️ Draft reply/);
+    mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: `dr6${i}` });
+    await wait();
+  }
+  assert.equal(trust(), 2);
+  const before = toOwner().length;
+  mods.inbox.handleIncoming({ ...customer, text: 'What are your opening hours tomorrow?', messageId: 'dr7' });
+  await wait();
+  assert.equal(toCustomer().at(-1), 'We are open 9am to 6pm.');
+  assert.equal(toOwner().length, before);
+
+  // A team member answering in the inbox replaces the waiting draft.
+  mods.db.prepare('DELETE FROM trust').run();
+  mods.inbox.handleIncoming({ ...customer, text: 'Open on Sunday?', messageId: 'dr8' });
+  await wait();
+  const [d] = assistant.listDrafts();
+  assert.ok(d);
+  assistant.learnFromTeamReply(d.conversation_id, 'Yes, Sunday 9 to 6.');
+  assert.equal(mods.db.prepare('SELECT status FROM drafts WHERE id = ?').get(d.id).status, 'edited');
+  assert.equal(assistant.listDrafts().length, 0);
+
+  // "no" drops a draft without sending anything.
+  mods.inbox.handleIncoming({ ...customer, text: 'Open on holidays?', messageId: 'dr9' });
+  await wait();
+  const n = toCustomer().length;
+  mods.inbox.handleIncoming({ ...owner, text: 'no', messageId: 'dr10' });
+  await wait();
+  assert.equal(toCustomer().length, n);
+  assert.match(toOwner().at(-1), /didn't send it/);
+
+  mods.settings.setSetting('drafts', { enabled: false, approvals: 3, hold_message: true });
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
