@@ -8,6 +8,8 @@ import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
 import { withoutPhoto, PHOTO_BLOCK } from '../ai/vision.js';
 import { reviewChats, reviewMessage, decideSuggestions } from './review.js';
+import { addSkill, removeSkill, listSkills, takeDueJobs, describeSkill } from './skills.js';
+import { WEEKDAYS } from './time.js';
 import { createSource, indexSource } from '../kb/index.js';
 import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
 
@@ -124,7 +126,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['answer_customer', 'self_review', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['answer_customer', 'self_review', 'add_rule', 'add_job', 'skills', 'remove_skill', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -135,6 +137,7 @@ const SCHEMA = {
     subject: { type: ['string', 'null'] },
     task_id: { type: ['integer', 'null'] },
     reply: { type: ['string', 'null'] },
+    repeat: { type: ['string', 'null'], enum: ['daily', 'weekly', null] },
   },
   required: ['action'],
 };
@@ -171,6 +174,10 @@ function systemPrompt(owner, language) {
     '  cancel: cancel a task by its number (#).',
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
+    '  add_rule: the owner teaches a lasting rule for how to answer customers ("from now on tell customers delivery is free over 500 AED", "always ask for the city before giving a price", "من هلق ورايح…", "دايماً قول للزبائن…"). Put the rule in "text", written as an instruction to the customer-service AI.',
+    '  add_job: the owner wants something done regularly ("every Friday at 5 send Nour the week\'s summary", "كل يوم الساعة 9 ذكرني اتفقد المخزون", "every morning search the gold price and tell me"). Put in "text" the task to do each time, as an instruction without the schedule; "repeat" daily or weekly; "when" with the time of day.',
+    '  skills: show the rules and regular jobs they taught you ("what did I teach you", "شو المهارات").',
+    '  remove_skill: delete a taught rule or job by its number (task_id).',
     '  self_review: the owner asks you to review your recent chats, learn from them or improve yourself ("review yourself", "شو تعلمت هالأسبوع", "راجع حالك", "improve yourself").',
     '  answer_customer: you just asked the owner about a customer\'s question you could not answer, and this message gives the answer. Put the answer in "text".',
     '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
@@ -186,7 +193,7 @@ function systemPrompt(owner, language) {
   ].join('\n');
 }
 
-async function understand(conv, owner, language, text) {
+async function understand(conv, owner, language, text, { instruction = false } = {}) {
   // Numbers and emails from a photo the owner sent just before ("save this number") count as written by them.
   const photo = conv.meta.assistantPhoto;
   const seen = photo && Date.now() - photo.at < CONFIRM_MINUTES * 60e3 && !PHOTO_BLOCK.test(text) ? `${text}\n${photo.text}` : text;
@@ -195,6 +202,8 @@ async function understand(conv, owner, language, text) {
     .all(conv.id, conv.meta.currentMessageId || Number.MAX_SAFE_INTEGER)
     .reverse()
     .map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text }));
+  // A taught job isn't a message in the chat: its instruction comes last.
+  if (instruction) history.push({ role: 'user', content: text });
   const raw = await chat([{ role: 'system', content: systemPrompt(owner, language) }, ...history], { temperature: 0, format: SCHEMA });
   let cmd;
   try {
@@ -536,6 +545,10 @@ async function carryOut(action, conv, owner, language) {
     indexSource(id).catch(() => {});
     return say(language, `📚 Added to Knowledge: "${action.title}". You can edit or delete it on the Knowledge page.`, `📚 انضافت للمعرفة: "${action.title}". فيك تعدلها أو تمسحها من صفحة Knowledge.`);
   }
+  if (action.kind === 'skill') {
+    const s = addSkill({ kind: action.skill, text: action.text, owner, ownerConversationId: conv.id, repeat: action.repeat, weekday: action.weekday, time: action.time }, tz);
+    return say(language, `🧩 Learned #${s.id}: ${describeSkill(s, language)}`, `🧩 تعلمت #${s.id}: ${describeSkill(s, language)}`);
+  }
   if (action.kind === 'review') {
     const ids = action.picks ? action.picks.map((n) => action.ids[n - 1]).filter(Boolean) : action.ids;
     const learned = decideSuggestions(ids, true);
@@ -808,6 +821,36 @@ async function act(cmd, conv, owner, language) {
         return `⚠️ ${err.message.startsWith("Couldn't reach") ? say(language, "I couldn't reach the internet. Please try again in a moment.", 'ما قدرت اوصل للإنترنت. جرب كمان شوي.') : err.message}`;
       }
     }
+    case 'add_rule':
+    case 'add_job': {
+      const own = withoutPhoto(cmd.said);
+      const textOf = (cmd.text || own).trim();
+      if (!textOf) return asking(say(language, 'What should I learn?', 'شو بدك اتعلم؟'));
+      let action = { kind: 'skill', skill: 'rule', text: textOf };
+      let line;
+      if (cmd.action === 'add_job') {
+        const weekday = weekdayIn(own);
+        const repeat = weekday != null && !/(every day|daily|كل يوم|يومي|يومياً|كل صباح|every morning|every evening|كل مسا)/i.test(own) ? 'weekly' : (cmd.repeat === 'weekly' && weekday != null ? 'weekly' : 'daily');
+        const time = /\d{1,2}:\d{2}$/.test(cmd.when || '') ? cmd.when.slice(-5).padStart(5, '0') : timeIn(own) || '09:00';
+        action = { kind: 'skill', skill: 'job', text: textOf, repeat, weekday: repeat === 'weekly' ? weekday : null, time };
+        line = describeSkill({ kind: 'job', ...action }, language);
+      } else {
+        line = describeSkill({ kind: 'rule', text: textOf }, language);
+      }
+      updateMeta(conv.id, { assistantPending: { action, at: Date.now() } });
+      return `${say(language, '🧩 New skill', '🧩 مهارة جديدة')}:\n${line}\n\n${say(language, 'Save it? Reply "yes" or "no".', 'احفظها؟ رد "نعم" أو "لا".')}`;
+    }
+    case 'skills': {
+      const all = listSkills();
+      if (!all.length) return say(language, 'You haven\'t taught me any rules or regular jobs yet. Try "every Friday at 5 send me the week\'s summary".', 'لسا ما علمتني قواعد أو مهام متكررة. جرب "كل جمعة الساعة 5 ابعتلي ملخص الأسبوع".');
+      return `🧩 ${say(language, 'What you taught me', 'اللي علمتني ياه')}:\n${all.map((s) => `#${s.id} ${s.enabled ? '' : '⏸️ '}${describeSkill(s, language)}`).join('\n')}\n\n${say(language, 'To delete one: "delete skill #3".', 'لتمسح وحدة: "امسح المهارة #3".')}`;
+    }
+    case 'remove_skill': {
+      const id = cmd.task_id || Number(String(cmd.said).match(/#?(\d+)/)?.[1]);
+      const gone = id && removeSkill(id);
+      if (!gone) return asking(say(language, 'Which number? Send "what did I teach you" to see them.', 'أي رقم؟ ابعت "شو المهارات" لتشوفهم.'));
+      return say(language, `🗑️ Deleted: ${describeSkill(gone, language)}`, `🗑️ انمسحت: ${describeSkill(gone, language)}`);
+    }
     case 'self_review': {
       await sendMessage(conv.id, say(language, '🧠 Reading this week\'s chats…', '🧠 عم اقرا محادثات هالأسبوع…'), { sender: 'ai', meta: { assistant: true } });
       const found = await reviewChats({ ownerConversationIds: ownerConversationIds() });
@@ -847,8 +890,8 @@ const BARE_NUMBER = /^\s*#?[\d٠-٩]{1,2}\s*$/;
 let chain = Promise.resolve();
 // Messages are handled one at a time, each with its own text: a message sent while a slow search
 // runs waits its turn and is then answered for what it said.
-export function handleOwnerMessage(conversationId, messageId = null) {
-  const run = chain.then(() => processOwnerMessage(conversationId, messageId));
+export function handleOwnerMessage(conversationId, messageId = null, job = null) {
+  const run = chain.then(() => (job ? runJob(conversationId, job) : processOwnerMessage(conversationId, messageId)));
   chain = run.catch((err) => console.error('[assistant]', err));
   return run;
 }
@@ -865,6 +908,23 @@ async function aboutPhoto(photo, owner, language) {
     ].join('\n') },
   ], { temperature: 0.2 });
   return CJK.test(out) || !out ? say(language, `📷 ${photo.replace(/^\[Photo:\s*|\]$/g, '')}`, `📷 ${photo.replace(/^\[Photo:\s*|\]$/g, '')}`) : out;
+}
+
+// A taught job: the instruction goes through the same steps as a message from the owner.
+async function runJob(conversationId, { text, job }) {
+  const conv = getConversation(conversationId);
+  const owner = ownerOf(conv);
+  if (!owner) return;
+  const language = conv.meta.assistantLanguage || detectLanguage([{ role: 'user', content: text }]);
+  const reply = (body) => sendMessage(conversationId, body, { sender: 'ai', voice: speakToOwner(), meta: { assistant: true, job: job.id } });
+  try {
+    const cmd = await understand(conv, owner, language, text, { instruction: true });
+    if (['add_rule', 'add_job', 'remove_skill', 'skills', 'answer_customer'].includes(cmd.action)) cmd.action = 'chat';
+    const out = await act(cmd, getConversation(conversationId), owner, language);
+    await reply(`⚙️ ${describeSkill(job, language)}\n\n${out?.ask || out}`);
+  } catch (err) {
+    await reply(`⚠️ ${describeSkill(job, language)}: ${err.message}`);
+  }
 }
 
 async function processOwnerMessage(conversationId, messageId = null) {
@@ -923,6 +983,7 @@ async function processOwnerMessage(conversationId, messageId = null) {
         if (kind === 'review') decideSuggestions(pending.action.ids, false);
         return await reply(kind === 'forget' ? say(language, 'OK, kept.', 'تمام، ما مسحت شي.')
           : kind === 'review' ? say(language, "OK, I won't learn those.", 'تمام، ما رح اتعلمهم.')
+          : kind === 'skill' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
           : kind === 'learn' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
             : say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
@@ -1074,6 +1135,7 @@ export async function runDueTasks(now = new Date()) {
     }
     await dailyBriefings(now);
     weeklyReview(now).catch((err) => console.error('[assistant] Weekly review:', err.message));
+    runDueJobs(now);
   } finally {
     running = false;
   }
@@ -1085,6 +1147,39 @@ export function startScheduler() {
   timer = setInterval(() => runDueTasks().catch((err) => console.error('[assistant] Scheduler:', err)), 20e3);
   timer.unref?.();
   runDueTasks().catch(() => {});
+}
+
+// --- Taught jobs ---
+// "every Friday" / "كل جمعة": the weekday named in the owner's words (0 = Sunday), or null.
+function weekdayIn(text) {
+  const t = ` ${String(text || '').toLowerCase()} `;
+  for (let d = 0; d < 7; d++) {
+    for (const w of WEEKDAYS[d]) {
+      const bare = w.replace(/^ال/, '');
+      if (new RegExp(`(^|[^\\p{L}])(${w}|${bare}|يوم ${bare}|s?${w}s?)(?=$|[^\\p{L}])`, 'u').test(t)) return d;
+    }
+  }
+  return null;
+}
+
+// "at 5 pm" / "الساعة 5 المسا" -> "17:00"
+function timeIn(text) {
+  const m = String(text || '').match(/(?:at|الساعة|الساعه|ع الساعة)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|الصبح|الصباح|صباحا|المسا|المساء|مساء|مساءً|العصر|الظهر|بالليل)?/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const pm = /pm|المسا|المساء|مساء|العصر|بالليل/i.test(m[3] || '') || (!m[3] && h >= 1 && h <= 6);
+  if (pm && h < 12) h += 12;
+  if (/am|الصبح|الصباح|صباحا/i.test(m[3] || '') && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${m[2] || '00'}`;
+}
+
+// Run the jobs owners taught, as if they had just sent the instruction.
+function runDueJobs(now) {
+  for (const job of takeDueJobs(now, timeZone())) {
+    const id = job.owner_conversation_id;
+    if (!id || !isOwnerConversation(id)) continue;
+    handleOwnerMessage(id, null, { text: job.text, job }).catch((err) => console.error(`[assistant] Job #${job.id} failed:`, err.message));
+  }
 }
 
 // --- Asking and alerting the owner ---

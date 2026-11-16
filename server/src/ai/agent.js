@@ -5,6 +5,7 @@ import { search } from '../kb/index.js';
 import { handoffPrompt, handoffReminder, matchTopics, takeTags, allowRedirect, pendingTopic, findCategory, confirmMessage } from '../handoff.js';
 import { getConversation } from '../inbox.js';
 import { withoutPhoto } from './vision.js';
+import { rulesForCustomers } from '../assistant/skills.js';
 
 export function redirectRules() {
   return db.prepare('SELECT * FROM redirects WHERE enabled = 1 ORDER BY id').all();
@@ -52,6 +53,11 @@ export function buildRulesPrompt(conv = null) {
   if (rules.length) {
     parts.push('', 'REDIRECT RULES (when a rule applies, include its exact link or phone number in your reply):');
     for (const r of rules) parts.push(`- ${r.name}: when ${r.when_text} -> give the customer: ${r.value}`);
+  }
+  const taught = rulesForCustomers();
+  if (taught.length) {
+    parts.push('', 'RULES FROM THE OWNER (always follow them):');
+    for (const r of taught) parts.push(`- ${r}`);
   }
   const handoff = handoffPrompt(conv);
   if (handoff) parts.push('', handoff);

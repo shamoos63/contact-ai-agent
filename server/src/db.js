@@ -110,6 +110,21 @@ CREATE TABLE IF NOT EXISTS owner_contacts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_owner_contacts ON owner_contacts(owner_key);
+-- Abilities owners taught by chat: rules for customer answers, and recurring jobs.
+CREATE TABLE IF NOT EXISTS skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,             -- 'rule' | 'job'
+  text TEXT NOT NULL,             -- the rule, or the instruction the job runs as if the owner said it
+  owner_name TEXT,
+  owner_conversation_id INTEGER,
+  repeat TEXT,                    -- job: 'daily' | 'weekly'
+  weekday INTEGER,                -- job, weekly: 0 = Sunday
+  time TEXT,                      -- job: 'HH:mm' local time
+  next_run TEXT,                  -- job: ISO time
+  last_run TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 -- Things the AI proposes to learn (from the team's own replies, found in its weekly self-review).
 -- Nothing reaches Knowledge until an owner approves it.
 CREATE TABLE IF NOT EXISTS suggestions (

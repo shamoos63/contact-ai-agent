@@ -16,6 +16,7 @@ import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
 import { listBackups, backupNow, BACKUP_DIR } from '../backup.js';
 import { listSuggestions, decideSuggestions, reviewChats } from '../assistant/review.js';
 import { ownerConversationIds } from '../assistant/index.js';
+import { listSkills, removeSkill, setSkillEnabled, addSkill } from '../assistant/skills.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
@@ -256,6 +257,22 @@ api.delete('/assistant/contacts/:id', (req, res) => {
 
 // --- AI engine ---
 api.get('/speech/status', (req, res) => res.json(speechStatus()));
+// --- Skills taught by chat (rules and regular jobs) ---
+api.get('/skills', (req, res) => res.json(listSkills()));
+api.post('/skills', (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Write the rule first' });
+  addSkill({ kind: 'rule', text, owner: { name: 'Dashboard' } }, getSetting('assistant').timezone);
+  res.json(listSkills());
+});
+api.post('/skills/:id/enabled', (req, res) => {
+  setSkillEnabled(Number(req.params.id), !!req.body?.enabled, getSetting('assistant').timezone);
+  res.json(listSkills());
+});
+api.delete('/skills/:id', (req, res) => {
+  removeSkill(Number(req.params.id));
+  res.json(listSkills());
+});
 // --- What the AI proposes to learn (approve or reject) ---
 api.get('/suggestions', (req, res) => res.json(listSuggestions({ status: req.query.status || 'pending' })));
 api.post('/suggestions/review', wrap(async (req, res) => {

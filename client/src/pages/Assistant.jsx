@@ -25,6 +25,56 @@ function what(t) {
   return p.text;
 }
 
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function Skills({ timeZone }) {
+  const [list, setList] = useState([]);
+  const [rule, setRule] = useState('');
+  useEffect(() => {
+    const load = () => api('/skills').then(setList);
+    load();
+    const socket = getSocket();
+    socket.on('skills', load);
+    return () => socket.off('skills', load);
+  }, []);
+  const add = async (e) => {
+    e.preventDefault();
+    setList(await api('/skills', { method: 'POST', body: { text: rule } }));
+    setRule('');
+  };
+  return (
+    <div className="card stack">
+      <h3>Skills it learned</h3>
+      <small className="muted">
+        Teach new abilities by chat. Rules change how customers are answered ("from now on tell customers delivery is free over 500 AED").
+        Regular jobs run by themselves ("every Friday at 5 send Nour the week's summary", "كل يوم الساعة 9 دورلي على سعر الذهب وخبرني").
+        Messages still wait for your "yes" if that is on.
+      </small>
+      {list.length > 0 && (
+        <table className="table flat">
+          <thead><tr><th>#</th><th>Kind</th><th>What</th><th>Next run</th><th>On</th><th /></tr></thead>
+          <tbody>
+            {list.map((s) => (
+              <tr key={s.id}>
+                <td>{s.id}</td>
+                <td className="nowrap">{s.kind === 'rule' ? '📏 Rule' : `⚙️ ${s.repeat === 'weekly' ? `Every ${DAYS[s.weekday]}` : 'Every day'} ${s.time}`}</td>
+                <td dir="auto">{s.text}</td>
+                <td className="nowrap small">{s.kind === 'job' && s.enabled && s.next_run ? when(s.next_run, timeZone) : '—'}</td>
+                <td><input type="checkbox" checked={!!s.enabled} onChange={(e) => api(`/skills/${s.id}/enabled`, { method: 'POST', body: { enabled: e.target.checked } }).then(setList)} /></td>
+                <td><button type="button" className="danger" onClick={() => confirm('Delete this skill?') && api(`/skills/${s.id}`, { method: 'DELETE' }).then(setList)}>Delete</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <form className="row" onSubmit={add}>
+        <input className="grow" dir="auto" value={rule} onChange={(e) => setRule(e.target.value)} placeholder="Add a rule, e.g. Always ask which city before giving a delivery price" />
+        <button className="primary" disabled={!rule.trim()}>Add rule</button>
+      </form>
+    </div>
+  );
+}
+
 function SavedContacts() {
   const [data, setData] = useState({ owners: [], contacts: [] });
   const [form, setForm] = useState({ owner_key: '', name: '', phone: '', email: '' });
@@ -194,6 +244,8 @@ export default function Assistant() {
       </form>
 
       <SavedContacts />
+
+      <Skills timeZone={a.timezone} />
 
       <div className="card stack">
         <h3>Things to try</h3>

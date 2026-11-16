@@ -1064,3 +1064,47 @@ test('self-review: learns general answers from the team (with approval), never o
   assert.equal(again.added.length, 0);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('skills: owners teach rules for customers and regular jobs by chat', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const skills = await import('../src/assistant/skills.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'S', phone: '+963944818181' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944818181@s.whatsapp.net';
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944818181', convMeta: { phone: '+963944818181' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const last = () => sent.filter((m) => m.to === ownerJid).at(-1).text;
+
+  assistantAnswers.push({ action: 'add_rule', text: 'Tell customers delivery is free over 500 AED.' });
+  mods.inbox.handleIncoming({ ...owner, text: 'from now on tell customers delivery is free over 500 AED', messageId: 'sk1' });
+  await wait();
+  assert.match(last(), /🧩 New skill:\nRule: Tell customers delivery is free over 500 AED\./);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'sk2' });
+  await wait();
+  assert.match(last(), /🧩 Learned #\d+: Rule:/);
+  assert.match(mods.agent.buildRulesPrompt(), /RULES FROM THE OWNER \(always follow them\):\n- Tell customers delivery is free over 500 AED\./);
+
+  // A weekly job: the day comes from the owner's words, the time from "at 5" (afternoon).
+  assistantAnswers.push({ action: 'add_job', text: 'Send me a summary of today', repeat: 'daily', when: null });
+  mods.inbox.handleIncoming({ ...owner, text: 'كل جمعة الساعة 5 ابعتلي ملخص اليوم', messageId: 'sk3' });
+  await wait();
+  assert.match(last(), /كل جمعة الساعة 17:00: Send me a summary of today/);
+  mods.inbox.handleIncoming({ ...owner, text: 'نعم', messageId: 'sk4' });
+  await wait();
+  const job = skills.listSkills().find((s) => s.kind === 'job');
+  assert.equal(job.repeat, 'weekly');
+  assert.equal(job.weekday, 5);
+  assert.equal(job.time, '17:00');
+  const next = new Date(job.next_run);
+  assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Damascus', weekday: 'long', hour: '2-digit', hourCycle: 'h23' }).format(next), 'Friday, 17');
+
+  // When it's due, it runs like a message from the owner, and moves to next week.
+  mods.db.prepare('UPDATE skills SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60e3).toISOString(), job.id);
+  assistantAnswers.push({ action: 'summary' });
+  await assistant.runDueTasks(new Date());
+  await wait();
+  assert.match(last(), /^⚙️ كل جمعة الساعة 17:00: Send me a summary of today\n\n📊/);
+  assert.ok(new Date(skills.listSkills().find((s) => s.id === job.id).next_run) > new Date(Date.now() + 86400e3));
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
