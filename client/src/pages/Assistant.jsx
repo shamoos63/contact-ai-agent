@@ -151,6 +151,21 @@ export default function Assistant() {
               <input type="checkbox" checked={a.web_access !== false} onChange={(e) => setA({ ...a, web_access: e.target.checked })} />
               <span>Online access: search the web, read links I send, and learn new things (added to Knowledge only after I reply "yes"). Customers never get web answers.</span>
             </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.ask_when_unsure !== false} onChange={(e) => setA({ ...a, ask_when_unsure: e.target.checked })} />
+              <span>Ask me when the AI can't answer a customer. I reply with the answer, it goes to the customer and is remembered in Knowledge.</span>
+            </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.alerts !== false} onChange={(e) => setA({ ...a, alerts: e.target.checked })} />
+              <span>Tell me right away about complaints, refunds and cancellations</span>
+            </label>
+            {a.alerts !== false && (
+              <label>
+                Alert words (comma separated)
+                <textarea dir="auto" rows={2} value={a.alert_keywords || ''} onChange={(e) => setA({ ...a, alert_keywords: e.target.value })} />
+                <small className="muted">Questions and alerts go to the first person under "Who can give tasks".</small>
+              </label>
+            )}
           </div>
         </div>
 

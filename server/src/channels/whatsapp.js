@@ -5,7 +5,7 @@ import QRCode from 'qrcode';
 import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, Browsers, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { DATA_DIR } from '../config.js';
 import { getSetting } from '../settings.js';
-import { handleIncoming, registerSender } from '../inbox.js';
+import { handleIncoming, registerSender, registerVoiceSender } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 import { isTeamNumber, registerWhatsAppSender } from '../handoff.js';
 
@@ -163,6 +163,12 @@ export async function logoutWhatsApp() {
 registerSender('whatsapp', async (conv, text) => {
   if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
   const sent = await sock.sendMessage(conv.external_id, { text });
+  return { externalId: sent?.key?.id };
+});
+
+registerVoiceSender('whatsapp', async (conv, audio) => {
+  if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
+  const sent = await sock.sendMessage(conv.external_id, { audio, mimetype: 'audio/ogg; codecs=opus', ptt: true });
   return { externalId: sent?.key?.id };
 });
 

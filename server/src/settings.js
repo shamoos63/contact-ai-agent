@@ -21,6 +21,11 @@ export const DEFAULTS = {
   voice: { enabled: true, model: 'onnx-community/whisper-small', language: 'auto' },
   // Photos from WhatsApp and Telegram are described by a local vision model, so the AI can answer them.
   vision: { enabled: true, model: 'qwen2.5vl:7b' },
+  // Daily copy of the database and WhatsApp login into data/backups (local time of the assistant's time zone).
+  backup: { enabled: true, time: '03:00', keep: 7 },
+  // The AI's own voice (Piper). For owners and customers: 'off', 'mirror' (answer a voice note with
+  // a voice note) or 'always'. also_text: send the written reply too.
+  speak: { enabled: false, voice_en: 'en_GB-alan-medium', voice_ar: 'ar_JO-kareem-medium', owners: 'mirror', customers: 'off', also_text: true, speed: 1 },
   // Team handoff: requests the AI passes to a person, grouped by topic (sales, maintenance, ...).
   handoff: {
     enabled: false,
@@ -67,6 +72,9 @@ export const DEFAULTS = {
     event_reminder_minutes: 30,
     daily_briefing: '', // e.g. "09:00": a short summary of the day to every owner
     web_access: true, // owners can search the web, read links and add what they learn to Knowledge (after "yes")
+    ask_when_unsure: true, // when the AI can't answer a customer, ask the first owner; their answer is sent and remembered
+    alerts: true, // complaints, refunds, cancellations: tell the first owner straight away
+    alert_keywords: 'refund, money back, complaint, complain, cancel my order, scam, fraud, lawyer, terrible, worst, angry, استرجاع, ارجاع المصاري, رجعولي, شكوى, اشتكي, بشتكي, نصب, نصابين, احتيال, حرامية, الغي الطلب, الغاء الطلب, محامي, زفت, مقرف',
     owners: [], // { name, phone, telegram, enabled }
   },
   meta: {
