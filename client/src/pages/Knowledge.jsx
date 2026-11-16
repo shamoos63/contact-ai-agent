@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileUp, Globe, PenLine, FlaskConical, BookOpen } from 'lucide-react';
+import { FileUp, Globe, PenLine, FlaskConical, BookOpen, Brain } from 'lucide-react';
 import { api, getSocket, formatTime, formatBytes } from '../api.js';
 import { PageHeader, Pill } from '../components/ui.jsx';
 
@@ -55,6 +55,8 @@ export default function Knowledge() {
         {tab === 'text' && <TextForm busy={busy} onSubmit={(body) => run(() => api('/kb/text', { method: 'POST', body }))} />}
         {notice && <pre className="error">{notice}</pre>}
       </div>
+
+      <Suggestions />
 
       <TestBox />
 
@@ -186,6 +188,54 @@ function TestBox() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// What the AI proposes to learn: from the team's own replies and its weekly self-review.
+function Suggestions() {
+  const [list, setList] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const load = () => api('/suggestions').then(setList);
+  useEffect(() => {
+    load();
+    const socket = getSocket();
+    socket.on('suggestions', load);
+    return () => socket.off('suggestions', load);
+  }, []);
+  const decide = async (s, decision) => setList(await api(`/suggestions/${s.id}/${decision}`, { method: 'POST' }));
+  const review = async () => {
+    setBusy(true);
+    setNote('');
+    try {
+      const r = await api('/suggestions/review', { method: 'POST' });
+      setList(r.pending);
+      setNote([`Found ${r.added} new thing${r.added === 1 ? '' : 's'} to learn.`, r.open.length ? `Customers asked and nobody answered: ${r.open.join(' · ')}` : ''].filter(Boolean).join(' '));
+    } catch (err) {
+      setNote(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card stack">
+      <div className="card-head">
+        <h3><Brain size={16} /> Suggested by the AI</h3>
+        <button type="button" disabled={busy} onClick={review}>{busy ? 'Reading this week\'s chats…' : 'Review chats now'}</button>
+      </div>
+      <small className="muted">
+        The AI reads the replies your team types in the inbox and, every week, its own chats. What would help other customers is proposed here
+        (and sent to you on WhatsApp). Nothing is learned until you approve it.
+      </small>
+      {list.length === 0 ? <p className="muted small">Nothing waiting.</p> : list.map((s) => (
+        <div key={s.id} className="row suggestion">
+          <div className="grow" dir="auto"><strong>{s.title}</strong><div className="small muted pre">{s.content}</div></div>
+          <button type="button" className="primary" onClick={() => decide(s, 'approve')}>Learn</button>
+          <button type="button" onClick={() => decide(s, 'reject')}>Skip</button>
+        </div>
+      ))}
+      {note && <small className="muted">{note}</small>}
     </div>
   );
 }

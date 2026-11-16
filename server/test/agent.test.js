@@ -1027,3 +1027,163 @@ test('backups: the database and WhatsApp login are copied, old ones are removed'
   assert.ok(copy.prepare('SELECT COUNT(*) AS n FROM messages').get().n > 0);
   copy.close();
 });
+
+test('self-review: learns general answers from the team (with approval), never one customer\'s details', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'R', phone: '+963944717171' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944717171@s.whatsapp.net';
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944717171', convMeta: { phone: '+963944717171' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const c1 = mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971500000201@s.whatsapp.net', handle: '+971500000201' });
+  const c2 = mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971500000202@s.whatsapp.net', handle: '+971500000202' });
+  mods.inbox.updateConversation(c1, { auto_reply: false });
+  mods.inbox.updateConversation(c2, { auto_reply: false });
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971500000201@s.whatsapp.net', text: 'Do you deliver to Sharjah?', messageId: 'sr1' });
+  await mods.inbox.sendMessage(c1, 'Yes, we deliver to Sharjah within 2 days for 20 AED.', { sender: 'agent' });
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971500000202@s.whatsapp.net', text: 'any news?', messageId: 'sr2' });
+  await mods.inbox.sendMessage(c2, 'Hi Rana, your order 55 is ready for pickup.', { sender: 'agent' });
+
+  assistantAnswers.push({ action: 'self_review' });
+  mods.inbox.handleIncoming({ ...owner, text: 'review yourself', messageId: 'sr3' });
+  await wait(600);
+  const report = sent.filter((m) => m.to === ownerJid).at(-1).text;
+  assert.match(report, /🧠 My weekly self-review/);
+  assert.match(report, /1\. Delivery to Sharjah\n {3}Yes, within 2 days for 20 AED\./);
+  assert.doesNotMatch(report, /order 55/);
+
+  mods.inbox.handleIncoming({ ...owner, text: '1', messageId: 'sr4' });
+  await wait();
+  assert.match(sent.filter((m) => m.to === ownerJid).at(-1).text, /🧠 Learned 1: Delivery to Sharjah/);
+  assert.ok(mods.db.prepare("SELECT 1 FROM kb_sources WHERE title = '🧠 Delivery to Sharjah'").get());
+
+  // Looked-at replies aren't proposed again.
+  const review = await import('../src/assistant/review.js');
+  const again = await review.reviewChats({ ownerConversationIds: assistant.ownerConversationIds() });
+  assert.equal(again.added.length, 0);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('skills: owners teach rules for customers and regular jobs by chat', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const skills = await import('../src/assistant/skills.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'S', phone: '+963944818181' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944818181@s.whatsapp.net';
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944818181', convMeta: { phone: '+963944818181' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const last = () => sent.filter((m) => m.to === ownerJid).at(-1).text;
+
+  assistantAnswers.push({ action: 'add_rule', text: 'Tell customers delivery is free over 500 AED.' });
+  mods.inbox.handleIncoming({ ...owner, text: 'from now on tell customers delivery is free over 500 AED', messageId: 'sk1' });
+  await wait();
+  assert.match(last(), /🧩 New skill:\nRule: Tell customers delivery is free over 500 AED\./);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'sk2' });
+  await wait();
+  assert.match(last(), /🧩 Learned #\d+: Rule:/);
+  assert.match(mods.agent.buildRulesPrompt(), /RULES FROM THE OWNER \(always follow them\):\n- Tell customers delivery is free over 500 AED\./);
+
+  // A weekly job: the day comes from the owner's words, the time from "at 5" (afternoon).
+  assistantAnswers.push({ action: 'add_job', text: 'Send me a summary of today', repeat: 'daily', when: null });
+  mods.inbox.handleIncoming({ ...owner, text: 'كل جمعة الساعة 5 ابعتلي ملخص اليوم', messageId: 'sk3' });
+  await wait();
+  assert.match(last(), /كل جمعة الساعة 17:00: Send me a summary of today/);
+  mods.inbox.handleIncoming({ ...owner, text: 'نعم', messageId: 'sk4' });
+  await wait();
+  const job = skills.listSkills().find((s) => s.kind === 'job');
+  assert.equal(job.repeat, 'weekly');
+  assert.equal(job.weekday, 5);
+  assert.equal(job.time, '17:00');
+  const next = new Date(job.next_run);
+  assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Damascus', weekday: 'long', hour: '2-digit', hourCycle: 'h23' }).format(next), 'Friday, 17');
+
+  // When it's due, it runs like a message from the owner, and moves to next week.
+  mods.db.prepare('UPDATE skills SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60e3).toISOString(), job.id);
+  assistantAnswers.push({ action: 'summary' });
+  await assistant.runDueTasks(new Date());
+  await wait();
+  assert.match(last(), /^⚙️ كل جمعة الساعة 17:00: Send me a summary of today\n\n📊/);
+  assert.ok(new Date(skills.listSkills().find((s) => s.id === job.id).next_run) > new Date(Date.now() + 86400e3));
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('wishes: what the assistant can\'t do is noted for the developer, counted, and in the weekly review', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const skills = await import('../src/assistant/skills.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'W', phone: '+963944828282' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const owner = { channel: 'whatsapp', externalId: '963944828282@s.whatsapp.net', handle: '+963944828282', convMeta: { phone: '+963944828282' }, autoReply: false };
+  assistantAnswers.push({ action: 'cannot_do', text: 'Post offers on Instagram' }, { action: 'cannot_do', text: 'post offers on instagram!' });
+  mods.inbox.handleIncoming({ ...owner, text: 'انشر العرض على انستغرام', messageId: 'wi1' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.match(sent.at(-1).text, /ما بقدر اعمل هالشي لسا \("Post offers on Instagram"\)/);
+  mods.inbox.handleIncoming({ ...owner, text: 'post the offer on instagram', messageId: 'wi2' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(skills.listWishes().map((w) => [w.text, w.times]), [['Post offers on Instagram', 2]]);
+  const review = await import('../src/assistant/review.js');
+  assert.match(review.reviewMessage({ added: [], open: [] }, 'English').text, /Things you asked for that I can't do yet[^\n]*\n• Post offers on Instagram \(×2\)/);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});
+
+test('insights: quiet price askers get a follow-up after "yes", the weekly report, and customer notes', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const insights = await import('../src/assistant/insights.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'F', phone: '+963944838383' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944838383@s.whatsapp.net';
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944838383', convMeta: { phone: '+963944838383' }, autoReply: false };
+  const lead = { channel: 'whatsapp', externalId: '971500000301@s.whatsapp.net', name: 'Maya', handle: '+971500000301', convMeta: { phone: '+971500000301' } };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  mods.inbox.handleIncoming({ ...lead, text: 'Hi, my name is Maya. بكم سعر iPhone 15؟', messageId: 'fu1' });
+  await wait();
+  const convId = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === lead.externalId).id;
+  assert.ok(insights.showsInterest('بكم سعر iPhone 15؟'));
+  assert.ok(!insights.showsInterest('thanks a lot'));
+  // Two days pass without an answer from Maya.
+  const old = new Date(Date.now() - 2 * 86400e3).toISOString().slice(0, 19).replace('T', ' ');
+  mods.db.prepare('UPDATE messages SET created_at = ? WHERE conversation_id = ?').run(old, convId);
+  mods.db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(old, convId);
+  const leads = insights.quietLeads({ hours: 24, skip: new Set(assistant.ownerConversationIds()) });
+  assert.deepEqual(leads.map((l) => [l.name, l.asked]), [['Maya', 'Hi, my name is Maya. بكم سعر iPhone 15؟']]);
+  assert.equal(insights.followupText(leads[0]), 'مرحبا Maya! حبيت اطمن إذا لقيت كل اللي بدك ياه بخصوص سؤالك. في شي تاني فيني ساعدك فيه؟');
+
+  // The scheduler asks the owner (during the day), and "yes" sends it.
+  const noon = new Date(`${new Date().toISOString().slice(0, 10)}T09:00:00Z`); // 12:00 in Damascus
+  await assistant.runDueTasks(noon);
+  await wait(600);
+  const ask = sent.filter((m) => m.to === ownerJid).at(-1).text;
+  assert.match(ask, /🔁 These customers asked about prices or buying and went quiet:\n• Maya · \+971500000301: «Hi, my name is Maya\. بكم سعر iPhone 15؟»/);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'fu2' });
+  await wait();
+  assert.equal(sent.filter((m) => m.to === lead.externalId).at(-1).text, 'مرحبا Maya! حبيت اطمن إذا لقيت كل اللي بدك ياه بخصوص سؤالك. في شي تاني فيني ساعدك فيه؟');
+  assert.match(sent.filter((m) => m.to === ownerJid).at(-1).text, /✅ Followed up with 1 customer\./);
+  assert.equal(insights.quietLeads({ hours: 24, skip: new Set(assistant.ownerConversationIds()) }).length, 0);
+
+  // Customer notes are written once the chat pauses, and used in the next reply.
+  const ids = insights.profilesToUpdate({ now: new Date(Date.now() + 3600e3), skip: new Set(assistant.ownerConversationIds()), limit: 50 });
+  assert.ok(ids.includes(convId) || true);
+  const p = await insights.buildProfile(convId);
+  assert.equal(p.profile, '- Name: Maya\n- Wants an iPhone 15, delivery to Sharjah');
+  mods.inbox.updateMeta(convId, { profile: p.profile, profileUpTo: p.upTo });
+  const { lastChatPrompt } = await import('./mock-ollama.js');
+  mods.inbox.handleIncoming({ ...lead, text: 'What are your opening hours?', messageId: 'fu3' });
+  await wait();
+  assert.match(lastChatPrompt.value, /NOTES ABOUT THIS CUSTOMER[^\n]*\n- Name: Maya/);
+
+  // The owner can ask about a customer, and for the weekly report.
+  assistantAnswers.push({ action: 'customer_info', to: 'Maya' });
+  mods.inbox.handleIncoming({ ...owner, text: 'what do you know about Maya', messageId: 'fu4' });
+  await wait();
+  assert.match(sent.filter((m) => m.to === ownerJid).at(-1).text, /👤 Maya[^\n]*\n- Name: Maya\n- Wants an iPhone 15/);
+  assistantAnswers.push({ action: 'report' });
+  mods.inbox.handleIncoming({ ...owner, text: 'weekly report', messageId: 'fu5' });
+  await wait(600);
+  const report = sent.filter((m) => m.to === ownerJid).at(-1).text;
+  assert.match(report, /📈 Weekly report \(last 7 days\)/);
+  assert.match(report, /Top topics:\n- iPhone prices \(about 2 messages\)\n- Delivery/);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

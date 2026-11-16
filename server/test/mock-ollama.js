@@ -18,6 +18,8 @@ export const lastWebPrompt = { value: '' };
 // What the photo model "sees", one per photo; and the last photo request.
 export const visionAnswers = [];
 export const lastVision = { value: null };
+// The last customer-reply prompt (system messages joined).
+export const lastChatPrompt = { value: '' };
 let mockBase = '';
 
 export function startMockOllama() {
@@ -76,6 +78,20 @@ export function startMockOllama() {
         const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
       }
+      if (system.includes('These are customer messages to')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Here you go:\n- iPhone prices (about 2 messages)\n- Delivery (about 1 message)' } }));
+      }
+      if (system.includes('You keep short notes about a customer')) {
+        const name = /my name is (\w+)/i.exec(data.messages.at(-1).content)?.[1];
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: name ? `- Name: ${name}\n- Wants an iPhone 15, delivery to Sharjah` : '- (nothing yet)' } }));
+      }
+      if (system.includes('learn from its human team')) {
+        const team = data.messages.at(-1).content;
+        const keep = /deliver/i.test(team);
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(keep
+          ? { keep: true, title: 'Delivery to Sharjah', question: 'Do you deliver to Sharjah?', answer: 'Yes, within 2 days for 20 AED.' }
+          : { keep: false }) } }));
+      }
       if (system.includes('You write WhatsApp replies for')) {
         const facts = system.match(/Owner's answer \(facts to use\): «([^»]*)»/)[1];
         return res.end(JSON.stringify({ message: { role: 'assistant', content: `Yes! ${facts}.` } }));
@@ -91,6 +107,7 @@ export function startMockOllama() {
       if (data.messages[0].content.includes('forwarding rules')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: /invoice/i.test(data.messages[0].content.split('Email:')[1]) ? '1' : 'none' } }));
       }
+      if (system.includes('COMPANY KNOWLEDGE')) lastChatPrompt.value = system;
       const knows = system.includes('9am to 6pm');
       const lastUser = [...data.messages].reverse().find((m) => m.role === 'user')?.content || '';
       if (lastUser.includes('Which of these teams should handle it?')) {

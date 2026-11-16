@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react';
 import { api, getSocket } from '../api.js';
 import { PageHeader, Pill } from '../components/ui.jsx';
 
-const KIND = { reminder: '⏰ Reminder', event: '📅 Appointment', message: '💬 Message', email: '✉️ Email', briefing: '☀️ Daily summary' };
+const KIND = { reminder: '⏰ Reminder', event: '📅 Appointment', message: '💬 Message', email: '✉️ Email', briefing: '☀️ Daily summary', review: '🧠 Self-review' };
 const TONE = { pending: 'warn', done: 'ok', failed: 'error', cancelled: 'muted' };
 const STATUS = { pending: 'Waiting', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
 const NEW_OWNER = { name: '', phone: '', telegram: '', enabled: true };
@@ -23,6 +23,91 @@ function what(t) {
   if (t.kind === 'event') return p.title;
   if (t.kind === 'briefing') return `Sent to ${t.owner_name || 'owner'}`;
   return p.text;
+}
+
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function Skills({ timeZone }) {
+  const [list, setList] = useState([]);
+  const [rule, setRule] = useState('');
+  useEffect(() => {
+    const load = () => api('/skills').then(setList);
+    load();
+    const socket = getSocket();
+    socket.on('skills', load);
+    return () => socket.off('skills', load);
+  }, []);
+  const add = async (e) => {
+    e.preventDefault();
+    setList(await api('/skills', { method: 'POST', body: { text: rule } }));
+    setRule('');
+  };
+  return (
+    <div className="card stack">
+      <h3>Skills it learned</h3>
+      <small className="muted">
+        Teach new abilities by chat. Rules change how customers are answered ("from now on tell customers delivery is free over 500 AED").
+        Regular jobs run by themselves ("every Friday at 5 send Nour the week's summary", "كل يوم الساعة 9 دورلي على سعر الذهب وخبرني").
+        Messages still wait for your "yes" if that is on.
+      </small>
+      {list.length > 0 && (
+        <table className="table flat">
+          <thead><tr><th>#</th><th>Kind</th><th>What</th><th>Next run</th><th>On</th><th /></tr></thead>
+          <tbody>
+            {list.map((s) => (
+              <tr key={s.id}>
+                <td>{s.id}</td>
+                <td className="nowrap">{s.kind === 'rule' ? '📏 Rule' : `⚙️ ${s.repeat === 'weekly' ? `Every ${DAYS[s.weekday]}` : 'Every day'} ${s.time}`}</td>
+                <td dir="auto">{s.text}</td>
+                <td className="nowrap small">{s.kind === 'job' && s.enabled && s.next_run ? when(s.next_run, timeZone) : '—'}</td>
+                <td><input type="checkbox" checked={!!s.enabled} onChange={(e) => api(`/skills/${s.id}/enabled`, { method: 'POST', body: { enabled: e.target.checked } }).then(setList)} /></td>
+                <td><button type="button" className="danger" onClick={() => confirm('Delete this skill?') && api(`/skills/${s.id}`, { method: 'DELETE' }).then(setList)}>Delete</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <form className="row" onSubmit={add}>
+        <input className="grow" dir="auto" value={rule} onChange={(e) => setRule(e.target.value)} placeholder="Add a rule, e.g. Always ask which city before giving a delivery price" />
+        <button className="primary" disabled={!rule.trim()}>Add rule</button>
+      </form>
+    </div>
+  );
+}
+
+const REPO = 'https://github.com/shamoos63/contact-ai-agent';
+
+// What owners asked for that the assistant can't do yet.
+function Wishes() {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    const load = () => api('/wishes').then(setList);
+    load();
+    const socket = getSocket();
+    socket.on('wishes', load);
+    return () => socket.off('wishes', load);
+  }, []);
+  if (!list.length) return null;
+  const issue = (w) => `${REPO}/issues/new?title=${encodeURIComponent(`Assistant: ${w.text}`.slice(0, 120))}&body=${encodeURIComponent(`Asked ${w.times} time(s) in the assistant chat${w.owner_name ? ` by ${w.owner_name}` : ''}:\n\n> ${w.text}`)}`;
+  return (
+    <div className="card stack">
+      <h3>Things it can't do yet</h3>
+      <small className="muted">You asked for these and the assistant couldn't do them. Send one to the developer as a GitHub issue, or mark it done once it's built.</small>
+      <table className="table flat">
+        <tbody>
+          {list.map((w) => (
+            <tr key={w.id}>
+              <td dir="auto">{w.text}{w.times > 1 && <span className="muted"> ×{w.times}</span>}</td>
+              <td className="right nowrap">
+                <a className="button" href={issue(w)} target="_blank" rel="noreferrer">Request on GitHub</a>{' '}
+                <button type="button" onClick={() => api(`/wishes/${w.id}/done`, { method: 'POST' }).then(setList)}>Done</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function SavedContacts() {
@@ -83,14 +168,18 @@ function SavedContacts() {
   );
 }
 
+// The assistant page also edits a few settings kept under their own keys.
+const EXTRAS = ['followups', 'customer_memory', 'self_review'];
+
 export default function Assistant() {
   const [a, setA] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [showAll, setShowAll] = useState(false);
   const [msg, setMsg] = useState('');
+  const withExtras = (s) => setA({ ...s.assistant, ...Object.fromEntries(EXTRAS.map((k) => [k, s[k]])) });
 
   useEffect(() => {
-    api('/settings').then((s) => setA(s.assistant));
+    api('/settings').then(withExtras);
   }, []);
   useEffect(() => {
     const load = () => api(`/assistant/tasks${showAll ? '' : '?status=pending'}`).then(setTasks);
@@ -108,7 +197,9 @@ export default function Assistant() {
   const save = async (e) => {
     e.preventDefault();
     if (a.enabled && !owners.some((o) => o.enabled !== false && (o.phone || o.telegram))) return setMsg('⚠ Add at least one number or Telegram username');
-    setA((await api('/settings', { method: 'PUT', body: { assistant: a } })).assistant);
+    const extras = Object.fromEntries(EXTRAS.map((k) => [k, a[k]]));
+    if (extras.followups) extras.followups = { ...extras.followups, hours: Math.max(2, Number(extras.followups.hours) || 24) };
+    withExtras(await api('/settings', { method: 'PUT', body: { assistant: a, ...extras } }));
     setMsg('✓ Saved');
     setTimeout(() => setMsg(''), 2000);
   };
@@ -159,6 +250,44 @@ export default function Assistant() {
               <input type="checkbox" checked={a.alerts !== false} onChange={(e) => setA({ ...a, alerts: e.target.checked })} />
               <span>Tell me right away about complaints, refunds and cancellations</span>
             </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.followups?.enabled !== false} onChange={(e) => setA({ ...a, followups: { ...a.followups, enabled: e.target.checked } })} />
+              <span>Follow up with customers who asked about prices and went quiet</span>
+            </label>
+            {a.followups?.enabled !== false && (
+              <div className="row">
+                <label>
+                  After (hours)
+                  <input type="number" min="2" max="168" value={a.followups?.hours ?? 24} onChange={(e) => setA({ ...a, followups: { ...a.followups, hours: e.target.value } })} />
+                </label>
+                <label className="grow">
+                  How
+                  <select value={a.followups?.mode || 'remind_me'} onChange={(e) => setA({ ...a, followups: { ...a.followups, mode: e.target.value } })}>
+                    <option value="remind_me">Ask me first (I reply "yes")</option>
+                    <option value="send">Send the follow-up by itself</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            <label className="switch">
+              <input type="checkbox" checked={a.customer_memory?.enabled !== false} onChange={(e) => setA({ ...a, customer_memory: { enabled: e.target.checked } })} />
+              <span>Remember customers: short notes (name, what they want, preferences) used in later replies and shown in the inbox</span>
+            </label>
+            <label className="switch">
+              <input type="checkbox" checked={a.self_review?.enabled !== false} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, enabled: e.target.checked } })} />
+              <span>Every week, send me a business report and what the AI wants to learn</span>
+            </label>
+            {a.self_review?.enabled !== false && (
+              <div className="row">
+                <label className="grow">
+                  Day
+                  <select value={a.self_review?.day || 'Sunday'} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, day: e.target.value } })}>
+                    {DAYS.map((d) => <option key={d}>{d}</option>)}
+                  </select>
+                </label>
+                <label>At<input type="time" value={a.self_review?.time || '10:00'} onChange={(e) => setA({ ...a, self_review: { ...a.self_review, time: e.target.value } })} /></label>
+              </div>
+            )}
             {a.alerts !== false && (
               <label>
                 Alert words (comma separated)
@@ -194,6 +323,10 @@ export default function Assistant() {
       </form>
 
       <SavedContacts />
+
+      <Skills timeZone={a.timezone} />
+
+      <Wishes />
 
       <div className="card stack">
         <h3>Things to try</h3>

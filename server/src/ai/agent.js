@@ -5,6 +5,7 @@ import { search } from '../kb/index.js';
 import { handoffPrompt, handoffReminder, matchTopics, takeTags, allowRedirect, pendingTopic, findCategory, confirmMessage } from '../handoff.js';
 import { getConversation } from '../inbox.js';
 import { withoutPhoto } from './vision.js';
+import { rulesForCustomers } from '../assistant/skills.js';
 
 export function redirectRules() {
   return db.prepare('SELECT * FROM redirects WHERE enabled = 1 ORDER BY id').all();
@@ -52,6 +53,11 @@ export function buildRulesPrompt(conv = null) {
   if (rules.length) {
     parts.push('', 'REDIRECT RULES (when a rule applies, include its exact link or phone number in your reply):');
     for (const r of rules) parts.push(`- ${r.name}: when ${r.when_text} -> give the customer: ${r.value}`);
+  }
+  const taught = rulesForCustomers();
+  if (taught.length) {
+    parts.push('', 'RULES FROM THE OWNER (always follow them):');
+    for (const r of taught) parts.push(`- ${r}`);
   }
   const handoff = handoffPrompt(conv);
   if (handoff) parts.push('', handoff);
@@ -101,7 +107,7 @@ export async function answer(messages, { conv = null } = {}) {
   const prompt = [
     // Fixed instructions first, then what changes per message, so the start of the prompt is reused.
     { role: 'system', content: buildRulesPrompt(conv) },
-    { role: 'system', content: buildKnowledgePrompt(knowledge) },
+    { role: 'system', content: buildKnowledgePrompt(knowledge) + (conv?.meta?.profile && getSetting('customer_memory').enabled ? `\n\nNOTES ABOUT THIS CUSTOMER (from earlier chats; use them to be personal, never read them out):\n${conv.meta.profile}` : '') },
     ...messages,
     // A last reminder right before the answer is what keeps small models on track.
     { role: 'system', content: [handoffReminder(conv, topics), `Answer the customer now, in ${language} only.`].filter(Boolean).join('\n') },

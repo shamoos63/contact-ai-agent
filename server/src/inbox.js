@@ -138,7 +138,7 @@ async function autoReply(conversationId, { force = false } = {}) {
     const { reply, sources, tag, unsure } = await generateReply(conversationId);
     // A human may have taken over while the model was thinking.
     if (!force && !conversationRow(conversationId).auto_reply) return;
-    await sendMessage(conversationId, reply, { sender: 'ai', voice: wantsVoice(conversationId, 'customer'), meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })) } });
+    await sendMessage(conversationId, reply, { sender: 'ai', voice: wantsVoice(conversationId, 'customer'), meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })), ...(unsure ? { unsure: true } : {}) } });
     afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
     // The AI didn't know: ask the owner, who can answer by chat (sent to the customer and remembered).
     if (unsure && !tag) askOwnerAbout(conversationId).catch((err) => console.error('[assistant] Asking the owner failed:', err.message));

@@ -7,6 +7,10 @@ import { outboundSenders, teamContacts, simplify } from '../handoff.js';
 import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
 import { withoutPhoto, PHOTO_BLOCK } from '../ai/vision.js';
+import { reviewChats, reviewMessage, decideSuggestions } from './review.js';
+import { addSkill, removeSkill, listSkills, takeDueJobs, describeSkill, addWish } from './skills.js';
+import { WEEKDAYS } from './time.js';
+import { quietLeads, followupText, weeklyReport, profilesToUpdate, buildProfile } from './insights.js';
 import { createSource, indexSource } from '../kb/index.js';
 import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
 
@@ -123,7 +127,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['answer_customer', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['answer_customer', 'self_review', 'add_rule', 'add_job', 'skills', 'remove_skill', 'cannot_do', 'report', 'customer_info', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -134,6 +138,7 @@ const SCHEMA = {
     subject: { type: ['string', 'null'] },
     task_id: { type: ['integer', 'null'] },
     reply: { type: ['string', 'null'] },
+    repeat: { type: ['string', 'null'], enum: ['daily', 'weekly', null] },
   },
   required: ['action'],
 };
@@ -170,7 +175,15 @@ function systemPrompt(owner, language) {
     '  cancel: cancel a task by its number (#).',
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
+    '  add_rule: the owner teaches a lasting rule for how to answer customers ("from now on tell customers delivery is free over 500 AED", "always ask for the city before giving a price", "من هلق ورايح…", "دايماً قول للزبائن…"). Put the rule in "text", written as an instruction to the customer-service AI.',
+    '  add_job: the owner wants something done regularly ("every Friday at 5 send Nour the week\'s summary", "كل يوم الساعة 9 ذكرني اتفقد المخزون", "every morning search the gold price and tell me"). Put in "text" the task to do each time, as an instruction without the schedule; "repeat" daily or weekly; "when" with the time of day.',
+    '  skills: show the rules and regular jobs they taught you ("what did I teach you", "شو المهارات").',
+    '  remove_skill: delete a taught rule or job by its number (task_id).',
+    '  self_review: the owner asks you to review your recent chats, learn from them or improve yourself ("review yourself", "شو تعلمت هالأسبوع", "راجع حالك", "improve yourself").',
     '  answer_customer: you just asked the owner about a customer\'s question you could not answer, and this message gives the answer. Put the answer in "text".',
+    '  report: the owner wants the weekly business report or statistics ("weekly report", "تقرير الأسبوع", "how was the week").',
+    '  customer_info: the owner asks what you know about a customer ("what do you know about Rana", "شو بتعرف عن رنا"). Put the name or number in "to".',
+    '  cannot_do: the owner asks you to DO something none of the actions above can do (call someone, book, pay, post on Instagram, edit a file, order from a supplier…). Put what they want in "text", short, in English.',
     '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
     '  Any request to tell, message or talk to another person ("احكي مع", "قلو", "قلها", "ابعت لـ", "tell", "message") is send_message, never chat.',
     `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
@@ -184,7 +197,7 @@ function systemPrompt(owner, language) {
   ].join('\n');
 }
 
-async function understand(conv, owner, language, text) {
+async function understand(conv, owner, language, text, { instruction = false } = {}) {
   // Numbers and emails from a photo the owner sent just before ("save this number") count as written by them.
   const photo = conv.meta.assistantPhoto;
   const seen = photo && Date.now() - photo.at < CONFIRM_MINUTES * 60e3 && !PHOTO_BLOCK.test(text) ? `${text}\n${photo.text}` : text;
@@ -193,6 +206,8 @@ async function understand(conv, owner, language, text) {
     .all(conv.id, conv.meta.currentMessageId || Number.MAX_SAFE_INTEGER)
     .reverse()
     .map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.text }));
+  // A taught job isn't a message in the chat: its instruction comes last.
+  if (instruction) history.push({ role: 'user', content: text });
   const raw = await chat([{ role: 'system', content: systemPrompt(owner, language) }, ...history], { temperature: 0, format: SCHEMA });
   let cmd;
   try {
@@ -330,7 +345,7 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
 }
 
 // --- Finding who to send to ---
-function ownerConversationIds() {
+export function ownerConversationIds() {
   return db
     .prepare("SELECT id FROM conversations WHERE channel IN ('whatsapp', 'telegram')")
     .all()
@@ -533,6 +548,25 @@ async function carryOut(action, conv, owner, language) {
     const id = createSource({ type: 'text', title: `${action.icon || '🌐'} ${action.title}`, origin: action.origin, content: action.content });
     indexSource(id).catch(() => {});
     return say(language, `📚 Added to Knowledge: "${action.title}". You can edit or delete it on the Knowledge page.`, `📚 انضافت للمعرفة: "${action.title}". فيك تعدلها أو تمسحها من صفحة Knowledge.`);
+  }
+  if (action.kind === 'followup') {
+    let n = 0;
+    for (const id of action.ids) {
+      const msg = await sendMessage(id, followupText({ conversationId: id }), { sender: 'agent', meta: { followup: true, byAssistant: owner?.name || true } });
+      if (!msg.error) n++;
+    }
+    return say(language, `✅ Followed up with ${n} customer${n === 1 ? '' : 's'}.`, `✅ تابعت مع ${n} من الزبائن.`);
+  }
+  if (action.kind === 'skill') {
+    const s = addSkill({ kind: action.skill, text: action.text, owner, ownerConversationId: conv.id, repeat: action.repeat, weekday: action.weekday, time: action.time }, tz);
+    return say(language, `🧩 Learned #${s.id}: ${describeSkill(s, language)}`, `🧩 تعلمت #${s.id}: ${describeSkill(s, language)}`);
+  }
+  if (action.kind === 'review') {
+    const ids = action.picks ? action.picks.map((n) => action.ids[n - 1]).filter(Boolean) : action.ids;
+    const learned = decideSuggestions(ids, true);
+    decideSuggestions(action.ids.filter((id) => !ids.includes(id)), false);
+    if (!learned.length) return say(language, 'Nothing learned (those numbers are not on the list).', 'ما تعلمت شي (هالأرقام مو بالقائمة).');
+    return say(language, `🧠 Learned ${learned.length}: ${learned.map((s) => s.title).join(', ')}. They're on the Knowledge page.`, `🧠 تعلمت ${learned.length}: ${learned.map((s) => s.title).join('، ')}. موجودين بصفحة Knowledge.`);
   }
   if (action.kind === 'answer') {
     const msg = await sendMessage(action.conversationId, action.text, { sender: 'agent', voice: wantsVoice(action.conversationId, 'customer'), meta: { byAssistant: owner?.name || true } });
@@ -799,6 +833,71 @@ async function act(cmd, conv, owner, language) {
         return `⚠️ ${err.message.startsWith("Couldn't reach") ? say(language, "I couldn't reach the internet. Please try again in a moment.", 'ما قدرت اوصل للإنترنت. جرب كمان شوي.') : err.message}`;
       }
     }
+    case 'add_rule':
+    case 'add_job': {
+      const own = withoutPhoto(cmd.said);
+      const textOf = (cmd.text || own).trim();
+      if (!textOf) return asking(say(language, 'What should I learn?', 'شو بدك اتعلم؟'));
+      let action = { kind: 'skill', skill: 'rule', text: textOf };
+      let line;
+      if (cmd.action === 'add_job') {
+        const weekday = weekdayIn(own);
+        const repeat = weekday != null && !/(every day|daily|كل يوم|يومي|يومياً|كل صباح|every morning|every evening|كل مسا)/i.test(own) ? 'weekly' : (cmd.repeat === 'weekly' && weekday != null ? 'weekly' : 'daily');
+        const time = /\d{1,2}:\d{2}$/.test(cmd.when || '') ? cmd.when.slice(-5).padStart(5, '0') : timeIn(own) || '09:00';
+        action = { kind: 'skill', skill: 'job', text: textOf, repeat, weekday: repeat === 'weekly' ? weekday : null, time };
+        line = describeSkill({ kind: 'job', ...action }, language);
+      } else {
+        line = describeSkill({ kind: 'rule', text: textOf }, language);
+      }
+      updateMeta(conv.id, { assistantPending: { action, at: Date.now() } });
+      return `${say(language, '🧩 New skill', '🧩 مهارة جديدة')}:\n${line}\n\n${say(language, 'Save it? Reply "yes" or "no".', 'احفظها؟ رد "نعم" أو "لا".')}`;
+    }
+    case 'skills': {
+      const all = listSkills();
+      if (!all.length) return say(language, 'You haven\'t taught me any rules or regular jobs yet. Try "every Friday at 5 send me the week\'s summary".', 'لسا ما علمتني قواعد أو مهام متكررة. جرب "كل جمعة الساعة 5 ابعتلي ملخص الأسبوع".');
+      return `🧩 ${say(language, 'What you taught me', 'اللي علمتني ياه')}:\n${all.map((s) => `#${s.id} ${s.enabled ? '' : '⏸️ '}${describeSkill(s, language)}`).join('\n')}\n\n${say(language, 'To delete one: "delete skill #3".', 'لتمسح وحدة: "امسح المهارة #3".')}`;
+    }
+    case 'remove_skill': {
+      const id = cmd.task_id || Number(String(cmd.said).match(/#?(\d+)/)?.[1]);
+      const gone = id && removeSkill(id);
+      if (!gone) return asking(say(language, 'Which number? Send "what did I teach you" to see them.', 'أي رقم؟ ابعت "شو المهارات" لتشوفهم.'));
+      return say(language, `🗑️ Deleted: ${describeSkill(gone, language)}`, `🗑️ انمسحت: ${describeSkill(gone, language)}`);
+    }
+    case 'report': {
+      await sendMessage(conv.id, say(language, '📈 Putting the report together…', '📈 عم جهز التقرير…'), { sender: 'ai', meta: { assistant: true } });
+      return weeklyReport({ language, skip: new Set(ownerConversationIds()) });
+    }
+    case 'customer_info': {
+      const target = resolveRecipient(cmd.to, language, cmd.said, owner);
+      if (target.ask) return asking(target.ask);
+      if (target.choose) {
+        return asking(say(language, `Which one?\n${chooseList(target.choose, language)}\nAsk again with their number.`, `أي واحد؟\n${chooseList(target.choose, language)}\nاسألني مرة تانية مع الرقم.`));
+      }
+      const digits = digitsOf(target.phone);
+      const c = (target.conversationId && getConversation(target.conversationId))
+        || (digits.length >= 7 && getConversation(db.prepare("SELECT id FROM conversations WHERE channel = 'whatsapp' AND external_id = ?").get(`${digits}@s.whatsapp.net`)?.id));
+      if (!c) return say(language, `I haven't chatted with ${target.label} yet.`, `لسا ما حكيت مع ${target.label}.`);
+      const lastIn = db.prepare("SELECT text, created_at FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(c.id);
+      return [
+        `👤 ${target.label}`,
+        c.meta.profile || say(language, '(No notes yet.)', '(ما في ملاحظات لسا.)'),
+        lastIn ? say(language, `Last message (${lastIn.created_at.slice(0, 16)} UTC): «${withoutPhoto(lastIn.text).slice(0, 200)}»`, `آخر رسالة (${lastIn.created_at.slice(0, 16)} UTC): «${withoutPhoto(lastIn.text).slice(0, 200)}»`) : '',
+      ].filter(Boolean).join('\n');
+    }
+    case 'cannot_do': {
+      const wish = addWish(cmd.text || withoutPhoto(cmd.said), owner);
+      return say(language,
+        `I can't do that yet${wish ? ` ("${wish.text}")` : ''}. I've added it to my list of things to learn, so my developer can build it. You can see the list on the Assistant page.`,
+        `ما بقدر اعمل هالشي لسا${wish ? ` ("${wish.text}")` : ''}. ضفته على قائمة الأشياء اللي لازم اتعلمها، لحتى المطور يبنيها. فيك تشوف القائمة بصفحة Assistant.`);
+    }
+    case 'self_review': {
+      await sendMessage(conv.id, say(language, '🧠 Reading this week\'s chats…', '🧠 عم اقرا محادثات هالأسبوع…'), { sender: 'ai', meta: { assistant: true } });
+      const found = await reviewChats({ ownerConversationIds: ownerConversationIds() });
+      const msg = reviewMessage(found, language);
+      if (!msg) return say(language, 'I looked at this week\'s chats: nothing new to learn, and no open questions. 👌', 'راجعت محادثات هالأسبوع: ما في شي جديد اتعلمه، ولا أسئلة بلا جواب. 👌');
+      if (msg.ids.length) updateMeta(conv.id, { assistantPending: { action: { kind: 'review', ids: msg.ids }, at: Date.now() } });
+      return msg.text;
+    }
     case 'answer_customer': {
       const q = conv.meta.assistantQuestion;
       const answer = withoutPhoto(cmd.said) || cmd.text;
@@ -830,8 +929,8 @@ const BARE_NUMBER = /^\s*#?[\d٠-٩]{1,2}\s*$/;
 let chain = Promise.resolve();
 // Messages are handled one at a time, each with its own text: a message sent while a slow search
 // runs waits its turn and is then answered for what it said.
-export function handleOwnerMessage(conversationId, messageId = null) {
-  const run = chain.then(() => processOwnerMessage(conversationId, messageId));
+export function handleOwnerMessage(conversationId, messageId = null, job = null) {
+  const run = chain.then(() => (job ? runJob(conversationId, job) : processOwnerMessage(conversationId, messageId)));
   chain = run.catch((err) => console.error('[assistant]', err));
   return run;
 }
@@ -848,6 +947,23 @@ async function aboutPhoto(photo, owner, language) {
     ].join('\n') },
   ], { temperature: 0.2 });
   return CJK.test(out) || !out ? say(language, `📷 ${photo.replace(/^\[Photo:\s*|\]$/g, '')}`, `📷 ${photo.replace(/^\[Photo:\s*|\]$/g, '')}`) : out;
+}
+
+// A taught job: the instruction goes through the same steps as a message from the owner.
+async function runJob(conversationId, { text, job }) {
+  const conv = getConversation(conversationId);
+  const owner = ownerOf(conv);
+  if (!owner) return;
+  const language = conv.meta.assistantLanguage || detectLanguage([{ role: 'user', content: text }]);
+  const reply = (body) => sendMessage(conversationId, body, { sender: 'ai', voice: speakToOwner(), meta: { assistant: true, job: job.id } });
+  try {
+    const cmd = await understand(conv, owner, language, text, { instruction: true });
+    if (['add_rule', 'add_job', 'remove_skill', 'skills', 'answer_customer'].includes(cmd.action)) cmd.action = 'chat';
+    const out = await act(cmd, getConversation(conversationId), owner, language);
+    await reply(`⚙️ ${describeSkill(job, language)}\n\n${out?.ask || out}`);
+  } catch (err) {
+    await reply(`⚠️ ${describeSkill(job, language)}: ${err.message}`);
+  }
 }
 
 async function processOwnerMessage(conversationId, messageId = null) {
@@ -886,8 +1002,16 @@ async function processOwnerMessage(conversationId, messageId = null) {
       }
     }
     const pending = conv.meta.assistantPending;
-    if (pending && Date.now() - pending.at < CONFIRM_MINUTES * 60e3) {
+    const pendingFor = ['review', 'followup'].includes(pending?.action?.kind) ? 12 * 60 : CONFIRM_MINUTES;
+    if (pending && Date.now() - pending.at < pendingFor * 60e3) {
       const word = firstWord(text);
+      // The weekly review: "1 3" learns those and skips the rest.
+      const picks = pending.action.kind === 'review' && /^[\s\d٠-٩,،و&and]+$/i.test(text) && /[\d٠-٩]/.test(text)
+        ? [...text.replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).matchAll(/\d+/g)].map((m) => Number(m[0])) : null;
+      if (picks) {
+        updateMeta(conversationId, { assistantPending: null });
+        return await reply(await carryOut({ ...pending.action, picks }, conv, owner, language));
+      }
       if (YES.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
         return await reply(await carryOut(pending.action, conv, owner, language));
@@ -895,7 +1019,11 @@ async function processOwnerMessage(conversationId, messageId = null) {
       if (NO.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
         const kind = pending.action.kind;
+        if (kind === 'review') decideSuggestions(pending.action.ids, false);
         return await reply(kind === 'forget' ? say(language, 'OK, kept.', 'تمام، ما مسحت شي.')
+          : kind === 'review' ? say(language, "OK, I won't learn those.", 'تمام، ما رح اتعلمهم.')
+          : kind === 'skill' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
+          : kind === 'followup' ? say(language, "OK, I won't follow up.", 'تمام، ما رح تابع معهم.')
           : kind === 'learn' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
             : say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
@@ -979,6 +1107,36 @@ async function runTask(t, now) {
 }
 
 // Send each owner the day's summary once, at the time set under Assistant.
+// Once a week (default Sunday 10:00), the self-review goes to the first owner.
+async function weeklyReview(now) {
+  const s = assistantSettings();
+  const r = getSetting('self_review');
+  if (!s.enabled || !r.enabled) return;
+  const tz = timeZone();
+  const local = toLocal(now, tz);
+  const weekday = new Date(Date.parse(`${local.slice(0, 10)}T12:00:00Z`)).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+  if (weekday !== r.day) return;
+  const at = fromLocal(`${local.slice(0, 10)} ${r.time || '10:00'}`, tz);
+  if (!at || now < at || now.getTime() - at.getTime() > 6 * 3600e3) return;
+  if (db.prepare("SELECT 1 FROM tasks WHERE kind = 'review' AND run_at = ?").get(at.toISOString())) return;
+  const id = firstOwnerConversation();
+  if (!id) return;
+  const owner = ownerOf(getConversation(id));
+  const language = ownerLanguage(id);
+  const taskId = insertTask({ kind: 'review', conv: { id }, owner, runAt: at, payload: { language } });
+  try {
+    if (r.report !== false) await sendMessage(id, await weeklyReport({ language, skip: new Set(ownerConversationIds()), now }), { sender: 'ai', meta: { assistant: true } });
+    const msg = reviewMessage(await reviewChats({ ownerConversationIds: ownerConversationIds() }), language);
+    if (msg) {
+      await sendMessage(id, msg.text, { sender: 'ai', voice: false, meta: { assistant: true } });
+      if (msg.ids.length) updateMeta(id, { assistantPending: { action: { kind: 'review', ids: msg.ids }, at: Date.now() } });
+    }
+    finishTask(taskId, 'done', msg ? 'Sent' : 'Nothing to report');
+  } catch (err) {
+    finishTask(taskId, 'failed', err.message);
+  }
+}
+
 async function dailyBriefings(now) {
   const s = assistantSettings();
   if (!s.enabled || !s.daily_briefing) return;
@@ -1006,7 +1164,7 @@ export async function runDueTasks(now = new Date()) {
   if (running) return;
   running = true;
   try {
-    const due = db.prepare("SELECT * FROM tasks WHERE status = 'pending' AND kind <> 'briefing' AND run_at <= ? ORDER BY run_at").all(now.toISOString());
+    const due = db.prepare("SELECT * FROM tasks WHERE status = 'pending' AND kind NOT IN ('briefing', 'review') AND run_at <= ? ORDER BY run_at").all(now.toISOString());
     for (const t of due) {
       try {
         await runTask(t, now);
@@ -1017,6 +1175,9 @@ export async function runDueTasks(now = new Date()) {
       }
     }
     await dailyBriefings(now);
+    weeklyReview(now).catch((err) => console.error('[assistant] Weekly review:', err.message));
+    runDueJobs(now);
+    background(now);
   } finally {
     running = false;
   }
@@ -1028,6 +1189,88 @@ export function startScheduler() {
   timer = setInterval(() => runDueTasks().catch((err) => console.error('[assistant] Scheduler:', err)), 20e3);
   timer.unref?.();
   runDueTasks().catch(() => {});
+}
+
+// --- Follow-ups and customer notes (in the background, so reminders are never held up) ---
+let lastFollowups = 0;
+let busy = false;
+function background(now) {
+  if (busy) return;
+  busy = true;
+  (async () => {
+    if (Math.abs(now.getTime() - lastFollowups) >= 30 * 60e3) {
+      lastFollowups = now.getTime();
+      await followUps(now);
+    }
+    await updateProfiles(now);
+  })().catch((err) => console.error('[assistant] Background:', err.message)).finally(() => { busy = false; });
+}
+
+async function followUps(now) {
+  const f = getSetting('followups');
+  if (!assistantSettings().enabled || !f.enabled) return;
+  const hour = Number(toLocal(now, timeZone()).slice(11, 13));
+  if (hour < 9 || hour >= 21) return; // never message customers at night
+  const leads = quietLeads({ hours: Number(f.hours) || 24, now, skip: new Set(ownerConversationIds()) });
+  if (!leads.length) return;
+  for (const l of leads) updateMeta(l.conversationId, { followedUpAt: now.getTime() });
+  if (f.mode === 'send') {
+    for (const l of leads) await sendMessage(l.conversationId, followupText(l), { sender: 'agent', meta: { followup: true } });
+    return;
+  }
+  const id = firstOwnerConversation();
+  if (!id) return;
+  const language = ownerLanguage(id);
+  const list = leads.slice(0, 10);
+  updateMeta(id, { assistantPending: { action: { kind: 'followup', ids: list.map((l) => l.conversationId) }, at: Date.now() } });
+  await sendMessage(id, [
+    say(language, '🔁 These customers asked about prices or buying and went quiet:', '🔁 هدول الزبائن سألوا عن أسعار أو شراء وما رجعوا:'),
+    ...list.map((l) => `• ${[l.name, l.handle].filter(Boolean).join(' · ')}: «${l.asked}»`),
+    '',
+    say(language, `Reply "yes" and I'll send each a short follow-up ("${getSetting('followups').message_en.replace(/\s*\{name\}/g, '')}"), or "no".`, `رد "نعم" وأنا ببعت لكل واحد متابعة قصيرة ("${getSetting('followups').message_ar.replace(/\s*\{name\}/g, '')}")، أو "لا".`),
+  ].join('\n'), { sender: 'ai', meta: { assistant: true } });
+}
+
+async function updateProfiles(now) {
+  if (!getSetting('customer_memory').enabled) return;
+  for (const id of profilesToUpdate({ now, skip: new Set(ownerConversationIds()), limit: 2 })) {
+    const p = await buildProfile(id);
+    if (p) updateMeta(id, { profile: p.profile, profileUpTo: p.upTo, profileAt: Date.now() });
+    else updateMeta(id, { profileUpTo: db.prepare("SELECT MAX(id) AS m FROM messages WHERE conversation_id = ? AND direction = 'in'").get(id).m || 0 });
+  }
+}
+
+// --- Taught jobs ---
+// "every Friday" / "كل جمعة": the weekday named in the owner's words (0 = Sunday), or null.
+function weekdayIn(text) {
+  const t = ` ${String(text || '').toLowerCase()} `;
+  for (let d = 0; d < 7; d++) {
+    for (const w of WEEKDAYS[d]) {
+      const bare = w.replace(/^ال/, '');
+      if (new RegExp(`(^|[^\\p{L}])(${w}|${bare}|يوم ${bare}|s?${w}s?)(?=$|[^\\p{L}])`, 'u').test(t)) return d;
+    }
+  }
+  return null;
+}
+
+// "at 5 pm" / "الساعة 5 المسا" -> "17:00"
+function timeIn(text) {
+  const m = String(text || '').match(/(?:at|الساعة|الساعه|ع الساعة)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|الصبح|الصباح|صباحا|المسا|المساء|مساء|مساءً|العصر|الظهر|بالليل)?/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const pm = /pm|المسا|المساء|مساء|العصر|بالليل/i.test(m[3] || '') || (!m[3] && h >= 1 && h <= 6);
+  if (pm && h < 12) h += 12;
+  if (/am|الصبح|الصباح|صباحا/i.test(m[3] || '') && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${m[2] || '00'}`;
+}
+
+// Run the jobs owners taught, as if they had just sent the instruction.
+function runDueJobs(now) {
+  for (const job of takeDueJobs(now, timeZone())) {
+    const id = job.owner_conversation_id;
+    if (!id || !isOwnerConversation(id)) continue;
+    handleOwnerMessage(id, null, { text: job.text, job }).catch((err) => console.error(`[assistant] Job #${job.id} failed:`, err.message));
+  }
 }
 
 // --- Asking and alerting the owner ---
