@@ -8,7 +8,7 @@ import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
 import { withoutPhoto, PHOTO_BLOCK } from '../ai/vision.js';
 import { reviewChats, reviewMessage, decideSuggestions } from './review.js';
-import { addSkill, removeSkill, listSkills, takeDueJobs, describeSkill } from './skills.js';
+import { addSkill, removeSkill, listSkills, takeDueJobs, describeSkill, addWish } from './skills.js';
 import { WEEKDAYS } from './time.js';
 import { createSource, indexSource } from '../kb/index.js';
 import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
@@ -126,7 +126,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['answer_customer', 'self_review', 'add_rule', 'add_job', 'skills', 'remove_skill', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['answer_customer', 'self_review', 'add_rule', 'add_job', 'skills', 'remove_skill', 'cannot_do', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -180,6 +180,7 @@ function systemPrompt(owner, language) {
     '  remove_skill: delete a taught rule or job by its number (task_id).',
     '  self_review: the owner asks you to review your recent chats, learn from them or improve yourself ("review yourself", "شو تعلمت هالأسبوع", "راجع حالك", "improve yourself").',
     '  answer_customer: you just asked the owner about a customer\'s question you could not answer, and this message gives the answer. Put the answer in "text".',
+    '  cannot_do: the owner asks you to DO something none of the actions above can do (call someone, book, pay, post on Instagram, edit a file, order from a supplier…). Put what they want in "text", short, in English.',
     '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
     '  Any request to tell, message or talk to another person ("احكي مع", "قلو", "قلها", "ابعت لـ", "tell", "message") is send_message, never chat.',
     `- when: the local date and time as "YYYY-MM-DD HH:mm", or null for "now" / not given. Use this calendar for day names: ${calendar()}. "بعد ساعتين" means two hours from now. If only a day is given for a reminder, use 09:00.`,
@@ -850,6 +851,12 @@ async function act(cmd, conv, owner, language) {
       const gone = id && removeSkill(id);
       if (!gone) return asking(say(language, 'Which number? Send "what did I teach you" to see them.', 'أي رقم؟ ابعت "شو المهارات" لتشوفهم.'));
       return say(language, `🗑️ Deleted: ${describeSkill(gone, language)}`, `🗑️ انمسحت: ${describeSkill(gone, language)}`);
+    }
+    case 'cannot_do': {
+      const wish = addWish(cmd.text || withoutPhoto(cmd.said), owner);
+      return say(language,
+        `I can't do that yet${wish ? ` ("${wish.text}")` : ''}. I've added it to my list of things to learn, so my developer can build it. You can see the list on the Assistant page.`,
+        `ما بقدر اعمل هالشي لسا${wish ? ` ("${wish.text}")` : ''}. ضفته على قائمة الأشياء اللي لازم اتعلمها، لحتى المطور يبنيها. فيك تشوف القائمة بصفحة Assistant.`);
     }
     case 'self_review': {
       await sendMessage(conv.id, say(language, '🧠 Reading this week\'s chats…', '🧠 عم اقرا محادثات هالأسبوع…'), { sender: 'ai', meta: { assistant: true } });

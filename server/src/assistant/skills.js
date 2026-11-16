@@ -72,3 +72,28 @@ export function describeSkill(s, language = 'English') {
     : (language === 'Arabic' ? `كل يوم الساعة ${s.time}` : `every day at ${s.time}`);
   return `${when}: ${s.text}`;
 }
+
+// --- Feature requests: what owners asked for that it can't do yet ---
+const same = (a, b) => a.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim() === b.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+export function addWish(text, owner) {
+  const clean = String(text || '').trim().slice(0, 300);
+  if (!clean) return null;
+  const known = db.prepare("SELECT * FROM wishes WHERE status = 'open'").all().find((w) => same(w.text, clean));
+  if (known) {
+    db.prepare("UPDATE wishes SET times = times + 1, last_at = datetime('now') WHERE id = ?").run(known.id);
+  } else {
+    db.prepare('INSERT INTO wishes (text, owner_name) VALUES (?, ?)').run(clean, owner?.name || null);
+  }
+  emit('wishes', { changed: true });
+  return db.prepare("SELECT * FROM wishes WHERE status = 'open' ORDER BY last_at DESC LIMIT 1").get();
+}
+
+export function listWishes(status = 'open') {
+  return db.prepare('SELECT * FROM wishes WHERE status = ? ORDER BY times DESC, last_at DESC').all(status);
+}
+
+export function setWishDone(id) {
+  db.prepare("UPDATE wishes SET status = 'done' WHERE id = ?").run(id);
+  emit('wishes', { changed: true });
+}

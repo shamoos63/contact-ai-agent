@@ -1108,3 +1108,22 @@ test('skills: owners teach rules for customers and regular jobs by chat', async 
   assert.ok(new Date(skills.listSkills().find((s) => s.id === job.id).next_run) > new Date(Date.now() + 86400e3));
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('wishes: what the assistant can\'t do is noted for the developer, counted, and in the weekly review', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  const skills = await import('../src/assistant/skills.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'W', phone: '+963944828282' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const owner = { channel: 'whatsapp', externalId: '963944828282@s.whatsapp.net', handle: '+963944828282', convMeta: { phone: '+963944828282' }, autoReply: false };
+  assistantAnswers.push({ action: 'cannot_do', text: 'Post offers on Instagram' }, { action: 'cannot_do', text: 'post offers on instagram!' });
+  mods.inbox.handleIncoming({ ...owner, text: 'انشر العرض على انستغرام', messageId: 'wi1' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.match(sent.at(-1).text, /ما بقدر اعمل هالشي لسا \("Post offers on Instagram"\)/);
+  mods.inbox.handleIncoming({ ...owner, text: 'post the offer on instagram', messageId: 'wi2' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(skills.listWishes().map((w) => [w.text, w.times]), [['Post offers on Instagram', 2]]);
+  const review = await import('../src/assistant/review.js');
+  assert.match(review.reviewMessage({ added: [], open: [] }, 'English').text, /Things you asked for that I can't do yet[^\n]*\n• Post offers on Instagram \(×2\)/);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

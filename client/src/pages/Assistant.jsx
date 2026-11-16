@@ -75,6 +75,41 @@ function Skills({ timeZone }) {
   );
 }
 
+const REPO = 'https://github.com/shamoos63/contact-ai-agent';
+
+// What owners asked for that the assistant can't do yet.
+function Wishes() {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    const load = () => api('/wishes').then(setList);
+    load();
+    const socket = getSocket();
+    socket.on('wishes', load);
+    return () => socket.off('wishes', load);
+  }, []);
+  if (!list.length) return null;
+  const issue = (w) => `${REPO}/issues/new?title=${encodeURIComponent(`Assistant: ${w.text}`.slice(0, 120))}&body=${encodeURIComponent(`Asked ${w.times} time(s) in the assistant chat${w.owner_name ? ` by ${w.owner_name}` : ''}:\n\n> ${w.text}`)}`;
+  return (
+    <div className="card stack">
+      <h3>Things it can't do yet</h3>
+      <small className="muted">You asked for these and the assistant couldn't do them. Send one to the developer as a GitHub issue, or mark it done once it's built.</small>
+      <table className="table flat">
+        <tbody>
+          {list.map((w) => (
+            <tr key={w.id}>
+              <td dir="auto">{w.text}{w.times > 1 && <span className="muted"> ×{w.times}</span>}</td>
+              <td className="right nowrap">
+                <a className="button" href={issue(w)} target="_blank" rel="noreferrer">Request on GitHub</a>{' '}
+                <button type="button" onClick={() => api(`/wishes/${w.id}/done`, { method: 'POST' }).then(setList)}>Done</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SavedContacts() {
   const [data, setData] = useState({ owners: [], contacts: [] });
   const [form, setForm] = useState({ owner_key: '', name: '', phone: '', email: '' });
@@ -246,6 +281,8 @@ export default function Assistant() {
       <SavedContacts />
 
       <Skills timeZone={a.timezone} />
+
+      <Wishes />
 
       <div className="card stack">
         <h3>Things to try</h3>

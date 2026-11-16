@@ -4,6 +4,7 @@ import { chat } from '../ai/ollama.js';
 import { search, createSource, indexSource } from '../kb/index.js';
 import { withoutPhoto } from '../ai/vision.js';
 import { emit } from '../realtime.js';
+import { listWishes } from './skills.js';
 
 // Self-improvement, always with the owner's approval:
 // - The team's own replies to customers (typed in the inbox) are read for knowledge worth keeping.
@@ -166,7 +167,12 @@ export function reviewMessage({ added, open }, language) {
     lines.push('', say(language, "Customers asked these and I didn't know (send me the answers any time, or add them on the Knowledge page):", 'زبائن سألوا هدول وما عرفت (ابعتلي الأجوبة أي وقت، أو ضيفها من صفحة Knowledge):'));
     open.forEach((q) => lines.push(`• ${q}`));
   }
-  if (!pending.length && !open.length) return null;
+  const wishes = listWishes().slice(0, 5);
+  if (wishes.length) {
+    lines.push('', say(language, "Things you asked for that I can't do yet (on my list for the developer):", 'أشياء طلبتها وما بقدر اعملها لسا (على قائمتي للمطور):'));
+    wishes.forEach((w) => lines.push(`• ${w.text}${w.times > 1 ? ` (×${w.times})` : ''}`));
+  }
+  if (!pending.length && !open.length && !wishes.length) return null;
   if (pending.length) lines.push('', say(language, 'Reply "yes" to learn all, numbers to pick (e.g. "1 3"), or "no".', 'رد "نعم" لاتعلمهم كلهم، أو أرقام لتختار (مثلاً "1 3")، أو "لا".'));
   return { text: lines.join('\n'), ids: pending.slice(0, 10).map((s) => s.id) };
 }

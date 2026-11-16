@@ -125,6 +125,16 @@ CREATE TABLE IF NOT EXISTS skills (
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Things owners asked for that the assistant can't do yet: a to-do list for its developer.
+CREATE TABLE IF NOT EXISTS wishes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  text TEXT NOT NULL,
+  owner_name TEXT,
+  times INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'open', -- open | done
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 -- Things the AI proposes to learn (from the team's own replies, found in its weekly self-review).
 -- Nothing reaches Knowledge until an owner approves it.
 CREATE TABLE IF NOT EXISTS suggestions (

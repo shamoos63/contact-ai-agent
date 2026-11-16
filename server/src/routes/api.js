@@ -16,7 +16,7 @@ import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
 import { listBackups, backupNow, BACKUP_DIR } from '../backup.js';
 import { listSuggestions, decideSuggestions, reviewChats } from '../assistant/review.js';
 import { ownerConversationIds } from '../assistant/index.js';
-import { listSkills, removeSkill, setSkillEnabled, addSkill } from '../assistant/skills.js';
+import { listSkills, removeSkill, setSkillEnabled, addSkill, listWishes, setWishDone } from '../assistant/skills.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
@@ -272,6 +272,11 @@ api.post('/skills/:id/enabled', (req, res) => {
 api.delete('/skills/:id', (req, res) => {
   removeSkill(Number(req.params.id));
   res.json(listSkills());
+});
+api.get('/wishes', (req, res) => res.json(listWishes()));
+api.post('/wishes/:id/done', (req, res) => {
+  setWishDone(Number(req.params.id));
+  res.json(listWishes());
 });
 // --- What the AI proposes to learn (approve or reject) ---
 api.get('/suggestions', (req, res) => res.json(listSuggestions({ status: req.query.status || 'pending' })));
