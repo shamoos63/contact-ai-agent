@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from '../ai/ollama.js';
 import { detectLanguage } from '../ai/agent.js';
-import { getConversation, sendMessage, updateMeta, ensureConversation, wantsVoice, sendProductPhotos } from '../inbox.js';
+import { getConversation, sendMessage, updateMeta, ensureConversation, wantsVoice, sendProductPhotos, showPresence } from '../inbox.js';
 import { outboundSenders, teamContacts, simplify } from '../handoff.js';
 import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
@@ -986,6 +986,7 @@ async function processOwnerMessage(conversationId, messageId = null) {
   const reply = (body) => sendMessage(conversationId, body, { sender: 'ai', voice: wantsVoice(conversationId, 'owner'), meta: { assistant: true } });
 
   emit('typing', { conversationId, typing: true });
+  const stopPresence = showPresence(conversationId, wantsVoice(conversationId, 'owner') ? 'recording' : 'typing');
   try {
     if (msgMeta.image && msgMeta.imageError && !msgMeta.caption) {
       return await reply(msgMeta.imageError === 'off'
@@ -1110,6 +1111,7 @@ async function processOwnerMessage(conversationId, messageId = null) {
     console.error('[assistant] Failed:', err);
     await reply(say(language, `⚠️ Something went wrong: ${err.message}`, `⚠️ صار خطأ: ${err.message}`));
   } finally {
+    stopPresence();
     emit('typing', { conversationId, typing: false });
   }
 }

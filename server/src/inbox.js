@@ -19,6 +19,42 @@ export function registerSender(channel, fn) {
 export function registerVoiceSender(channel, fn) {
   voiceSenders.set(channel, fn);
 }
+// "typing…" / "recording audio…" in the customer's app while the AI works on an answer.
+const presenceSenders = new Map(); // channel -> { fn: async (externalId, 'typing' | 'recording' | 'paused'), every }
+export function registerPresence(channel, fn, every = 4000) {
+  presenceSenders.set(channel, { fn, every });
+}
+// Starts showing the state and keeps it up until the returned stop() is called (max 3 minutes).
+export function showPresenceTo(channel, externalId, kind = 'typing') {
+  const p = presenceSenders.get(channel);
+  if (!p || !externalId || getSetting('presence')?.enabled === false) return () => {};
+  let on = true;
+  const tick = () => on && p.fn(externalId, kind).catch(() => {});
+  tick();
+  const timer = setInterval(tick, p.every);
+  const limit = setTimeout(() => stop(), 180e3);
+  function stop() {
+    if (!on) return;
+    on = false;
+    clearInterval(timer);
+    clearTimeout(limit);
+    p.fn(externalId, 'paused').catch(() => {});
+  }
+  return stop;
+}
+// While a voice note or photo is being read, before the message is in the inbox: only when the AI
+// will answer this chat.
+export function showPresenceForIncoming({ channel, accountId = '', externalId, autoReply = true }, kind = 'typing') {
+  if (autoReply === false) return () => {};
+  const c = db.prepare('SELECT auto_reply FROM conversations WHERE channel = ? AND account_id = ? AND external_id = ?').get(channel, accountId || '', externalId);
+  if (c && !c.auto_reply) return () => {};
+  return showPresenceTo(channel, externalId, kind);
+}
+export function showPresence(conversationId, kind = 'typing') {
+  const conv = conversationRow(conversationId);
+  return conv ? showPresenceTo(conv.channel, conv.external_id, kind) : () => {};
+}
+
 const imageSenders = new Map(); // channel -> async (conversation, jpegBuffer, caption) => { externalId? }
 export function registerImageSender(channel, fn) {
   imageSenders.set(channel, fn);
@@ -167,6 +203,7 @@ export function scheduleAutoReply(conversationId) {
 
 async function autoReply(conversationId, { force = false } = {}) {
   emit('typing', { conversationId, typing: true });
+  const stopPresence = showPresence(conversationId, wantsVoice(conversationId, 'customer') ? 'recording' : 'typing');
   try {
     const { reply, sources, tag, unsure } = await generateReply(conversationId);
     // A human may have taken over while the model was thinking.
@@ -179,6 +216,7 @@ async function autoReply(conversationId, { force = false } = {}) {
     // The AI didn't know: ask the owner, who can answer by chat (sent to the customer and remembered).
     if (unsure && !tag) askOwnerAbout(conversationId).catch((err) => console.error('[assistant] Asking the owner failed:', err.message));
   } finally {
+    stopPresence();
     emit('typing', { conversationId, typing: false });
   }
 }

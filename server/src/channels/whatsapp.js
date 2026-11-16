@@ -5,7 +5,7 @@ import QRCode from 'qrcode';
 import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, Browsers, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { DATA_DIR } from '../config.js';
 import { getSetting } from '../settings.js';
-import { handleIncoming, registerSender, registerVoiceSender, registerImageSender } from '../inbox.js';
+import { handleIncoming, registerSender, registerVoiceSender, registerImageSender, registerPresence } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 import { isTeamNumber, registerWhatsAppSender } from '../handoff.js';
 
@@ -177,5 +177,16 @@ registerImageSender('whatsapp', async (conv, image, caption) => {
   const sent = await sock.sendMessage(conv.external_id, { image, caption: caption || undefined });
   return { externalId: sent?.key?.id };
 });
+
+// "typing…" / "recording audio…". WhatsApp shows it for about 25 seconds, so it's renewed every 10.
+const subscribed = new Set();
+registerPresence('whatsapp', async (jid, kind) => {
+  if (!sock || state.status !== 'connected') return;
+  if (!subscribed.has(jid)) {
+    subscribed.add(jid);
+    await sock.presenceSubscribe(jid).catch(() => {});
+  }
+  await sock.sendPresenceUpdate(kind === 'recording' ? 'recording' : kind === 'paused' ? 'paused' : 'composing', jid);
+}, 10000);
 
 registerWhatsAppSender(sendWhatsAppTo);

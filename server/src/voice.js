@@ -5,7 +5,7 @@ import { DATA_DIR } from './config.js';
 import { getSetting } from './settings.js';
 import { transcribe } from './ai/speech.js';
 import { describeImage, photoText } from './ai/vision.js';
-import { handleIncoming, addNote } from './inbox.js';
+import { handleIncoming, addNote, showPresenceForIncoming } from './inbox.js';
 
 export const MEDIA_DIR = path.join(DATA_DIR, 'media');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -25,6 +25,7 @@ export async function handleVoiceNote({ buffer, ext, duration, ...incoming }) {
     if (id) addNote(id, 'Voice notes are not turned into text. Turn it on under AI engine → Voice notes.');
     return;
   }
+  const stopPresence = showPresenceForIncoming(incoming);
   try {
     const { text, language } = await transcribe(buffer);
     if (!text) throw new Error('No speech found in the recording');
@@ -33,6 +34,8 @@ export async function handleVoiceNote({ buffer, ext, duration, ...incoming }) {
     console.error('[voice] Transcription failed:', err.message);
     const id = handleIncoming({ ...incoming, text: '🎤 Voice note', meta: { ...meta, transcribeError: err.message }, autoReply: false });
     if (id) addNote(id, `Could not turn this voice note into text: ${err.message}`);
+  } finally {
+    stopPresence();
   }
 }
 
@@ -44,10 +47,13 @@ export async function handleImage({ buffer, caption = '', ...incoming }) {
   const vision = getSetting('vision');
   let note = null;
   if (vision.enabled) {
+    const stopPresence = showPresenceForIncoming(incoming);
     try {
       const description = await describeImage(buffer, caption);
+      stopPresence();
       return handleIncoming({ ...incoming, text: photoText(caption, description), meta: { ...meta, described: true } });
     } catch (err) {
+      stopPresence();
       console.error('[vision] Could not describe the photo:', err.message);
       note = `Could not read this photo: ${err.message}`;
       meta.imageError = err.message;
