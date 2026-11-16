@@ -861,3 +861,99 @@ test('photos: the assistant reads a business card, saves the number from it, and
   assert.ok(mods.db.prepare("SELECT 1 FROM kb_sources WHERE title = '📷 A price list'").get());
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+// A stand-in for the Piper binary: records what it was asked to say and writes a short tone.
+async function fakePiper() {
+  const dir = path.join(dataDir, 'piper');
+  fs.mkdirSync(dir, { recursive: true });
+  const bin = path.join(dir, 'piper');
+  fs.writeFileSync(bin, `#!/bin/sh
+out=""; model=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--output_file" ] && out="$2"
+  [ "$1" = "--model" ] && model="$2"
+  shift
+done
+{ cat; echo "|$(basename "$model")"; } >> "${dir}/said.log"
+ffmpeg -loglevel error -y -f lavfi -i sine=frequency=300:duration=0.4 "$out"
+`, { mode: 0o755 });
+  process.env.PIPER_BIN = bin;
+  fs.mkdirSync(path.join(dataDir, 'voices'), { recursive: true });
+  for (const id of ['en_GB-alan-medium', 'ar_JO-kareem-medium']) {
+    fs.writeFileSync(path.join(dataDir, 'voices', `${id}.onnx`), '');
+    fs.writeFileSync(path.join(dataDir, 'voices', `${id}.onnx.json`), '{}');
+  }
+  return () => fs.readFileSync(path.join(dir, 'said.log'), 'utf8');
+}
+
+test('voice: text is made speakable (links, numbers, emoji)', async () => {
+  const { speakable, textLanguage } = await import('../src/ai/tts.js');
+  assert.equal(speakable('✅ Call +971 55 444 3322 or see https://x.ae/p **now**'), 'Call 9 7 1 5 5 4 4 4 3 3 2 2 or see the link in the message now');
+  assert.equal(speakable('⏰ تذكير #12:\n- اتصل بأحمد', 'Arabic'), 'تذكير رقم 12:. اتصل بأحمد');
+  assert.equal(textLanguage('مرحبا Sami'), 'Arabic');
+});
+
+test('voice: a voice note gets a voice note back, in the right voice', async () => {
+  const said = await fakePiper();
+  const { handleVoiceNote } = await import('../src/voice.js');
+  const speech = await import('../src/ai/speech.js');
+  const { execFileSync } = await import('node:child_process');
+  const ogg = execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:a', 'libopus', '-f', 'ogg', 'pipe:1']);
+  speech._setPipelineForTests(async () => ({ text: 'What are your opening hours?' }));
+  mods.settings.setSetting('speak', { ...mods.settings.getSetting('speak'), enabled: true, customers: 'mirror' });
+  const texts = [];
+  const voices = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => texts.push(text));
+  mods.inbox.registerVoiceSender('whatsapp', async (conv, audio) => { voices.push(audio); return { externalId: 'v-out' }; });
+
+  await handleVoiceNote({ channel: 'whatsapp', externalId: '971500000088@s.whatsapp.net', name: 'Ali', handle: '+971500000088', messageId: 'sv1', buffer: ogg, ext: 'ogg', duration: 1 });
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(voices.length, 1);
+  assert.equal(voices[0].subarray(0, 4).toString(), 'OggS');
+  assert.deepEqual(texts, ['We are open 9am to 6pm.']); // the text goes too ("also send the written reply")
+  assert.match(said(), /We are open 9am to 6pm\.\n\|en_GB-alan-medium\.onnx/);
+  const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === '971500000088@s.whatsapp.net');
+  const out = mods.inbox.listMessages(conv.id).find((m) => m.direction === 'out');
+  const meta = JSON.parse(out.meta);
+  assert.equal(meta.spoken, true);
+  assert.ok(fs.existsSync(path.join(dataDir, 'media', meta.audio)));
+
+  // A typed message gets a typed answer.
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971500000088@s.whatsapp.net', name: 'Ali', handle: '+971500000088', messageId: 'sv2', text: 'What are your opening hours?' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(voices.length, 1);
+  assert.equal(texts.length, 2);
+  mods.settings.setSetting('speak', { ...mods.settings.getSetting('speak'), enabled: false, customers: 'off' });
+});
+
+test('voice: the assistant speaks to its owner, and sends voice notes to others when asked', async () => {
+  const said = await fakePiper();
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'V', phone: '+963944909090' }] }));
+  mods.settings.setSetting('speak', { ...mods.settings.getSetting('speak'), enabled: true, owners: 'always', also_text: false });
+  const texts = [];
+  const voices = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => texts.push({ to: conv.external_id, text }));
+  mods.inbox.registerVoiceSender('whatsapp', async (conv, audio) => { voices.push({ to: conv.external_id, audio }); return { externalId: 'v' + voices.length }; });
+  const owner = { channel: 'whatsapp', externalId: '963944909090@s.whatsapp.net', handle: '+963944909090', convMeta: { phone: '+963944909090' }, autoReply: false };
+  const wait = () => new Promise((r) => setTimeout(r, 700));
+
+  assistantAnswers.push({ action: 'chat', reply: 'أهلين، كيف فيني ساعدك؟' });
+  mods.inbox.handleIncoming({ ...owner, text: 'مرحبا', messageId: 'sp1' });
+  await wait();
+  assert.equal(voices.length, 1);
+  assert.equal(texts.length, 0); // voice only: no link, number or long text
+  assert.match(said(), /أهلين، كيف فيني ساعدك؟\n\|ar_JO-kareem-medium\.onnx/);
+
+  // "send … as a voice note": the preview says so, and after "yes" it goes out as a voice note.
+  assistantAnswers.push({ action: 'send_message', to: '+971501234321', text: 'Your order is ready' });
+  mods.inbox.handleIncoming({ ...owner, text: 'send +971501234321 "Your order is ready" as a voice note', messageId: 'sp2' });
+  await wait();
+  assert.match(texts.at(-1).text, /🎤 Voice note to \+971501234321 now, saying:\n\nYour order is ready/);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'sp3' });
+  await wait();
+  assert.ok(voices.some((v) => v.to === '971501234321@s.whatsapp.net'));
+  assert.ok(!texts.some((t) => t.to === '971501234321@s.whatsapp.net'));
+  mods.settings.setSetting('speak', { ...mods.settings.getSetting('speak'), enabled: false, owners: 'mirror', also_text: true });
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

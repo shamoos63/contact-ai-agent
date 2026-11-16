@@ -239,7 +239,7 @@ function Bubble({ m }) {
       <audio controls preload="none" src={`/api/media/${meta.audio}`} />
       <div className="voice-text" dir="auto">
         <Mic size={13} />
-        {meta.transcribed ? <span>{m.text}</span> : <span className="muted">{meta.transcribeError ? 'Could not turn into text' : 'Not turned into text'}</span>}
+        {meta.transcribed || meta.spoken ? <span>{m.text}</span> : <span className="muted">{meta.transcribeError ? 'Could not turn into text' : 'Not turned into text'}</span>}
       </div>
     </div>
   );

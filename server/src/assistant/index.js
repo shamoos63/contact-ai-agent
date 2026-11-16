@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from '../ai/ollama.js';
 import { detectLanguage } from '../ai/agent.js';
-import { getConversation, sendMessage, updateMeta, ensureConversation } from '../inbox.js';
+import { getConversation, sendMessage, updateMeta, ensureConversation, wantsVoice } from '../inbox.js';
 import { outboundSenders, teamContacts } from '../handoff.js';
 import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
@@ -502,13 +502,18 @@ function resolveEmail(to, language) {
 }
 
 // --- Doing things ---
-async function sendToRecipient(target, text, owner) {
+// "send it as a voice note" / "ابعتلو فويس": the message goes out in the assistant's own voice.
+const VOICE_ASK = /(voice( note| message)?|record|audio|صوت|صوتي|صوتية|بصوتك|فويس|ريكورد|تسجيل)/i;
+// Reminders and the morning summary are spoken when the owner's voice replies are on.
+const speakToOwner = () => { const s = getSetting('speak'); return !!s.enabled && s.owners !== 'off'; };
+
+async function sendToRecipient(target, text, owner, voice = false) {
   let conversationId = target.conversationId;
   if (!conversationId) {
     const digits = digitsOf(target.phone);
     conversationId = ensureConversation({ channel: 'whatsapp', externalId: `${digits}@s.whatsapp.net`, handle: '+' + digits, convMeta: { phone: '+' + digits } });
   }
-  const msg = await sendMessage(conversationId, text, { sender: 'agent', meta: { byAssistant: owner?.name || true } });
+  const msg = await sendMessage(conversationId, text, { sender: 'agent', voice, meta: { byAssistant: owner?.name || true } });
   if (msg.error) throw new Error(msg.error);
 }
 
@@ -541,7 +546,7 @@ async function carryOut(action, conv, owner, language) {
     return say(language, `🕒 Scheduled #${id} for ${pretty(new Date(action.when), tz, language)}.`, `🕒 تمت الجدولة #${id} بتاريخ ${pretty(new Date(action.when), tz, language)}.`);
   }
   try {
-    if (action.kind === 'message') await sendToRecipient(action, action.text, owner);
+    if (action.kind === 'message') await sendToRecipient(action, action.text, owner, !!action.voice);
     else await sendEmailNow(action, action.subject, action.text);
     return say(language, `✅ Sent to ${action.label}.`, `✅ تم الإرسال إلى ${action.label}.`);
   } catch (err) {
@@ -673,13 +678,15 @@ async function act(cmd, conv, owner, language) {
         text: cmd.text,
         subject: isEmail ? cmd.subject || say(language, `Message from ${getSetting('company_name')}`, `رسالة من ${getSetting('company_name')}`) : null,
         when,
+        voice: !isEmail && VOICE_ASK.test(withoutPhoto(cmd.said)),
       };
       if (!s.confirm_before_sending) return carryOut(action, conv, owner, language);
       updateMeta(conv.id, { assistantPending: { action, at: Date.now() } });
       const timing = when ? say(language, ` on ${pretty(new Date(when), tz, language)}`, ` بتاريخ ${pretty(new Date(when), tz, language)}`) : say(language, ' now', ' هلق');
       const head = isEmail
         ? say(language, `✉️ Email to ${target.label}${timing}\nSubject: ${action.subject}`, `✉️ إيميل إلى ${target.label}${timing}\nالموضوع: ${action.subject}`)
-        : say(language, `💬 WhatsApp to ${target.label}${timing}:`, `💬 واتساب إلى ${target.label}${timing}:`);
+        : action.voice ? say(language, `🎤 Voice note to ${target.label}${timing}, saying:`, `🎤 رسالة صوتية إلى ${target.label}${timing}، بتقول:`)
+          : say(language, `💬 WhatsApp to ${target.label}${timing}:`, `💬 واتساب إلى ${target.label}${timing}:`);
       return `${head}\n\n${cmd.text}\n\n${say(language, 'Reply "yes" to send or "no" to cancel.', 'رد "نعم" للإرسال أو "لا" للإلغاء.')}`;
     }
     case 'list': {
@@ -835,7 +842,7 @@ async function processOwnerMessage(conversationId, messageId = null) {
   const hasWords = /\p{L}{2,}/u.test(own) && !msgMeta.imageError;
   const language = hasWords ? detectLanguage([{ role: 'user', content: own }]) : conv.meta.assistantLanguage || 'English';
   if (hasWords && !YES.has(firstWord(text)) && !NO.has(firstWord(text))) updateMeta(conversationId, { assistantLanguage: language });
-  const reply = (body) => sendMessage(conversationId, body, { sender: 'ai', meta: { assistant: true } });
+  const reply = (body) => sendMessage(conversationId, body, { sender: 'ai', voice: wantsVoice(conversationId, 'owner'), meta: { assistant: true } });
 
   emit('typing', { conversationId, typing: true });
   try {
@@ -919,7 +926,7 @@ async function runTask(t, now) {
   const p = JSON.parse(t.payload || '{}');
   const language = p.language || 'English';
   const tz = timeZone();
-  const notify = (text) => (t.owner_conversation_id ? sendMessage(t.owner_conversation_id, text, { sender: 'ai', meta: { assistant: true, taskId: t.id } }) : null);
+  const notify = (text) => (t.owner_conversation_id ? sendMessage(t.owner_conversation_id, text, { sender: 'ai', voice: speakToOwner(), meta: { assistant: true, taskId: t.id } }) : null);
   const late = now.getTime() - new Date(t.run_at).getTime() > 10 * 60e3
     ? say(language, ` (late: it was due ${pretty(new Date(t.run_at), tz, language)})`, ` (متأخر: كان موعده ${pretty(new Date(t.run_at), tz, language)})`)
     : '';
@@ -932,7 +939,7 @@ async function runTask(t, now) {
       : say(language, `📅 Now: ${p.title}`, `📅 هلق: ${p.title}`));
   } else if (t.kind === 'message' || t.kind === 'email') {
     try {
-      if (t.kind === 'message') await sendToRecipient(p, p.text, { name: t.owner_name });
+      if (t.kind === 'message') await sendToRecipient(p, p.text, { name: t.owner_name }, !!p.voice);
       else await sendEmailNow(p, p.subject, p.text);
     } catch (err) {
       await notify(say(language, `⚠️ Scheduled #${t.id} to ${p.label} failed: ${err.message}`, `⚠️ المجدولة #${t.id} لـ ${p.label} ما انبعتت: ${err.message}`));
@@ -957,7 +964,7 @@ async function dailyBriefings(now) {
     const language = detectLanguage([{ role: 'user', content: last }]);
     const taskId = insertTask({ kind: 'briefing', conv: { id }, owner, runAt: at, payload: { language } });
     try {
-      await sendMessage(id, `${say(language, '☀️ Good morning!', '☀️ صباح الخير!')}\n${todaySummary(language, id)}`, { sender: 'ai', meta: { assistant: true } });
+      await sendMessage(id, `${say(language, '☀️ Good morning!', '☀️ صباح الخير!')}\n${todaySummary(language, id)}`, { sender: 'ai', voice: speakToOwner(), meta: { assistant: true } });
       finishTask(taskId, 'done', 'Sent');
     } catch (err) {
       finishTask(taskId, 'failed', err.message);

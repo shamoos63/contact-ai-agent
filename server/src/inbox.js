@@ -4,12 +4,34 @@ import { getSetting } from './settings.js';
 import { generateReply } from './ai/agent.js';
 import { afterReply } from './handoff.js';
 import { isOwnerConversation, handleOwnerMessage } from './assistant/index.js';
+import { speak, saveVoiceNote } from './ai/tts.js';
 
 const senders = new Map(); // channel -> async (conversation, text) => { externalId? }
+const voiceSenders = new Map(); // channel -> async (conversation, oggBuffer) => { externalId? }
 
 export function registerSender(channel, fn) {
   senders.set(channel, fn);
 }
+export function registerVoiceSender(channel, fn) {
+  voiceSenders.set(channel, fn);
+}
+
+// Should this reply be spoken? audience: 'owner' or 'customer'. "mirror" answers a voice note
+// with a voice note.
+export function wantsVoice(conversationId, audience) {
+  const s = getSetting('speak');
+  if (!s.enabled) return false;
+  const conv = conversationRow(conversationId);
+  if (!conv || !voiceSenders.has(conv.channel)) return false;
+  const mode = audience === 'owner' ? s.owners : s.customers;
+  if (mode === 'always') return true;
+  if (mode !== 'mirror') return false;
+  const last = db.prepare("SELECT meta FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId);
+  return !!JSON.parse(last?.meta || '{}').voice;
+}
+
+// Links, numbers, emails and long answers are easier to read than to hear: they always go as text too.
+const needsText = (text) => /https?:\/\/|@\S+\.|\+?\d[\d\s-]{6,}\d/.test(text) || text.length > 600;
 
 function conversationRow(id) {
   const c = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
@@ -112,22 +134,35 @@ async function autoReply(conversationId, { force = false } = {}) {
     const { reply, sources, tag } = await generateReply(conversationId);
     // A human may have taken over while the model was thinking.
     if (!force && !conversationRow(conversationId).auto_reply) return;
-    await sendMessage(conversationId, reply, { sender: 'ai', meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })) } });
+    await sendMessage(conversationId, reply, { sender: 'ai', voice: wantsVoice(conversationId, 'customer'), meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })) } });
     afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
   } finally {
     emit('typing', { conversationId, typing: false });
   }
 }
 
-export async function sendMessage(conversationId, text, { sender = 'agent', meta } = {}) {
+export async function sendMessage(conversationId, text, { sender = 'agent', meta, voice = false } = {}) {
   const conv = conversationRow(conversationId);
   if (!conv) throw new Error('Conversation not found');
   const send = senders.get(conv.channel);
   let externalId = null;
   let error = null;
+  // A spoken reply: a voice note, plus the text when it's wanted or needed. If speaking fails, text only.
+  let spoken = false;
+  if (voice && voiceSenders.has(conv.channel)) {
+    try {
+      const audio = await speak(text);
+      externalId = (await voiceSenders.get(conv.channel)(conv, audio))?.externalId || null;
+      meta = { ...meta, audio: saveVoiceNote(audio), spoken: true };
+      spoken = true;
+    } catch (err) {
+      console.warn(`[voice] Sending as text instead: ${err.message}`);
+    }
+  }
   try {
+    if (spoken && !getSetting('speak').also_text && !needsText(text)) return insertMessage({ conversationId, direction: 'out', sender, text, externalId, meta });
     if (!send) throw new Error(`Channel "${conv.channel}" is not connected`);
-    externalId = (await send(conv, text))?.externalId || null;
+    externalId = (await send(conv, text))?.externalId || externalId;
   } catch (err) {
     error = err.message;
     console.error(`[inbox] Sending on ${conv.channel} failed:`, err.message);

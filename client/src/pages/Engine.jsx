@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge, Mic, Image as ImageIcon } from 'lucide-react';
+import { Download, Trash2, FolderOpen, Copy, Check, Pause, Cpu, Gauge, Mic, Image as ImageIcon, Volume2, Play } from 'lucide-react';
 import { getSocket } from '../api.js';
 import { api, formatBytes } from '../api.js';
 import { useEngine } from '../useEngine.js';
@@ -138,6 +138,8 @@ export default function Engine() {
 
       <VoiceCard />
 
+      <SpeakCard />
+
       <PhotosCard
         settings={settings}
         installed={installed(settings.vision.model)}
@@ -275,6 +277,120 @@ function PhotosCard({ settings, installed, downloading, online, onPull, onSave }
           {!installed && !downloading && <button className="primary" disabled={!online} onClick={onPull}><Download size={14} /> Download</button>}
         </div>
       )}
+    </section>
+  );
+}
+
+const MODES = [
+  ['off', 'Never'],
+  ['mirror', 'When they sent a voice note'],
+  ['always', 'Always'],
+];
+
+function SpeakCard() {
+  const [v, setV] = useState(null);
+  const [saved, setSaved] = useState('');
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api('/speak/status').then(setV);
+    const socket = getSocket();
+    socket.on('speak', setV);
+    return () => socket.off('speak', setV);
+  }, []);
+  if (!v) return null;
+  const s = v.settings;
+  const save = async (patch) => {
+    await api('/settings', { method: 'PUT', body: { speak: { ...s, ...patch } } });
+    setV(await api('/speak/status'));
+    setSaved('Saved ✓');
+    setTimeout(() => setSaved(''), 1500);
+  };
+  const tryVoice = async (language) => {
+    setErr('');
+    setBusy(language);
+    try {
+      const res = await fetch('/api/speak/try', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language,
+          text: language === 'Arabic' ? 'مرحبا، أنا مساعدك الشخصي. عندك اجتماع مع سامي بكرا الساعة أربعة.' : 'Good evening. I am your personal assistant. You have a meeting with Sami tomorrow at four.',
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      new Audio(URL.createObjectURL(await res.blob())).play();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+  const voiceRow = (language, key) => {
+    const list = v.voices.filter((x) => x.language === language);
+    const cur = v.voices.find((x) => x.id === s[key]);
+    return (
+      <label>
+        {language} voice
+        <div className="row">
+          <select className="grow" value={s[key]} onChange={(e) => save({ [key]: e.target.value })}>
+            {list.map((x) => <option key={x.id} value={x.id}>{x.label}{x.installed ? '' : ' (not downloaded)'}</option>)}
+          </select>
+          {cur?.installed
+            ? <button type="button" disabled={!v.piper || !!busy} onClick={() => tryVoice(language)}><Play size={14} /> {busy === language ? '…' : 'Listen'}</button>
+            : cur?.download && !cur.download.error
+              ? <span className="small muted nowrap">{formatBytes(cur.download.loaded)} / {formatBytes(cur.download.total)}</span>
+              : <button type="button" onClick={() => api('/speak/download', { method: 'POST', body: { id: s[key] } }).then(setV)}><Download size={14} /> Download (≈ {formatBytes(cur?.size || 0)})</button>}
+        </div>
+        {cur?.download?.error && <small className="error">{cur.download.error}</small>}
+      </label>
+    );
+  };
+  return (
+    <section className="card stack">
+      <div className="card-head">
+        <h3><Volume2 size={16} /> The AI's own voice</h3>
+        <span className="ok small">{saved}</span>
+      </div>
+      <p className="muted small">
+        The AI can answer with voice notes on WhatsApp and Telegram, made on this computer with the free Piper voices. Links, numbers and long
+        answers are always sent as text too. In the assistant chat you can also say "send it to Nour as a voice note" / "ابعتلو فويس".
+      </p>
+      {!v.piper && <div className="alert warn small">The speech engine is not installed yet. Rebuild the dashboard: <code>docker compose up -d --build --no-deps app</code></div>}
+      <label className="switch">
+        <input type="checkbox" checked={!!s.enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+        <span>Speak replies</span>
+      </label>
+      {s.enabled && (
+        <>
+          <div className="grid2">
+            {voiceRow('English', 'voice_en')}
+            {voiceRow('Arabic', 'voice_ar')}
+            <label>
+              Assistant replies to owners
+              <select value={s.owners} onChange={(e) => save({ owners: e.target.value })}>{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+              <small className="muted">When on, reminders and the morning summary are spoken too.</small>
+            </label>
+            <label>
+              Replies to customers
+              <select value={s.customers} onChange={(e) => save({ customers: e.target.value })}>{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+            </label>
+            <label>
+              Speed
+              <select value={String(s.speed)} onChange={(e) => save({ speed: Number(e.target.value) })}>
+                {[['0.85', 'Slower'], ['1', 'Normal'], ['1.15', 'Faster']].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </label>
+            <label className="switch">
+              <input type="checkbox" checked={s.also_text !== false} onChange={(e) => save({ also_text: e.target.checked })} />
+              <span>Also send the written reply</span>
+            </label>
+          </div>
+          <small className="muted">The Arabic voice speaks formal Arabic. Voices are kept in <code>data/voices</code>.</small>
+        </>
+      )}
+      {err && <span className="error small">{err}</span>}
     </section>
   );
 }

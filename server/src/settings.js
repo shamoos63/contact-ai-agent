@@ -21,6 +21,9 @@ export const DEFAULTS = {
   voice: { enabled: true, model: 'onnx-community/whisper-small', language: 'auto' },
   // Photos from WhatsApp and Telegram are described by a local vision model, so the AI can answer them.
   vision: { enabled: true, model: 'qwen2.5vl:7b' },
+  // The AI's own voice (Piper). For owners and customers: 'off', 'mirror' (answer a voice note with
+  // a voice note) or 'always'. also_text: send the written reply too.
+  speak: { enabled: false, voice_en: 'en_GB-alan-medium', voice_ar: 'ar_JO-kareem-medium', owners: 'mirror', customers: 'off', also_text: true, speed: 1 },
   // Team handoff: requests the AI passes to a person, grouped by topic (sales, maintenance, ...).
   handoff: {
     enabled: false,

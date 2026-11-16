@@ -12,6 +12,7 @@ import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
 import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
+import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
@@ -220,6 +221,7 @@ api.put('/settings', wrap(async (req, res) => {
   if (body.embed_model && body.embed_model !== before.embed_model) reindexAll();
   if (body.chat_model && body.chat_model !== before.chat_model) ollama.warmUp();
   if (body.voice?.enabled && (body.voice.model !== before.voice.model || !before.voice.enabled)) loadModel().catch(() => {});
+  if (body.speak) ensureVoices();
   emit('channels', channelStatus());
   res.json(maskedSettings());
 }));
@@ -251,6 +253,19 @@ api.delete('/assistant/contacts/:id', (req, res) => {
 
 // --- AI engine ---
 api.get('/speech/status', (req, res) => res.json(speechStatus()));
+// --- The AI's own voice ---
+api.get('/speak/status', (req, res) => res.json(speakStatus()));
+api.post('/speak/download', wrap(async (req, res) => {
+  downloadVoice(String(req.body?.id || '')).catch(() => {});
+  res.json(speakStatus());
+}));
+// Hear a voice before using it. Returns an Ogg Opus file.
+api.post('/speak/try', wrap(async (req, res) => {
+  const text = String(req.body?.text || '').slice(0, 400);
+  const language = req.body?.language === 'Arabic' ? 'Arabic' : req.body?.language === 'English' ? 'English' : undefined;
+  const audio = await speak(text, { language });
+  res.type('audio/ogg').send(audio);
+}));
 api.post('/speech/load', (req, res) => {
   loadModel().catch(() => {});
   res.json({ ok: true });

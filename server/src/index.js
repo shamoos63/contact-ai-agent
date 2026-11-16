@@ -12,6 +12,7 @@ import { verifyWebhook, receiveWebhook } from './channels/meta.js';
 import { startChannels, stopChannels } from './channels/index.js';
 import { ensureModels } from './ai/ollama.js';
 import { loadModel } from './ai/speech.js';
+import { ensureVoices } from './ai/tts.js';
 import { getSetting } from './settings.js';
 import { startScheduler } from './assistant/index.js';
 
@@ -48,6 +49,8 @@ server.listen(config.port, () => {
   startScheduler();
   // Get the voice model ready (downloads it the first time) so the first voice note isn't slow.
   if (getSetting('voice').enabled) loadModel().catch(() => {});
+  // The AI's own voice: download the chosen voices the first time.
+  ensureVoices();
 });
 
 async function shutdown() {
