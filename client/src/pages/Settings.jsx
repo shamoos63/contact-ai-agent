@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, formatBytes } from '../api.js';
 import { PageHeader, Pill, DownloadProgress } from '../components/ui.jsx';
 import { useEngine } from '../useEngine.js';
 
@@ -79,6 +79,7 @@ export default function Settings() {
           <span className="ok">{saved}</span>
         </div>
       </form>
+      <Backups />
       <Password />
     </div>
   );
@@ -121,5 +122,52 @@ function Password() {
       {msg && <div className={msg.startsWith('✓') ? 'ok' : 'error'}>{msg}</div>}
       <div><button className="primary">Change password</button></div>
     </form>
+  );
+}
+
+function Backups() {
+  const [b, setB] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  useEffect(() => {
+    api('/backups').then(setB);
+  }, []);
+  if (!b) return null;
+  const save = async (patch) => {
+    await api('/settings', { method: 'PUT', body: { backup: { ...b.settings, ...patch } } });
+    setB(await api('/backups'));
+  };
+  const now = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      setB(await api('/backups', { method: 'POST' }));
+      setMsg('✓ Backed up');
+    } catch (err) {
+      setMsg('⚠ ' + err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card stack">
+      <div className="card-head">
+        <h3>Backups</h3>
+        <button type="button" disabled={busy} onClick={now}>{busy ? 'Backing up…' : 'Back up now'}</button>
+      </div>
+      <small className="muted">
+        Every night a copy of the database (chats, knowledge, settings, tasks, saved contacts) and the WhatsApp login is kept in{' '}
+        <code>data/backups</code>. To restore one, stop the app and copy its files back into <code>data</code>. Keep a copy on another disk too.
+      </small>
+      <div className="row">
+        <label className="switch"><input type="checkbox" checked={!!b.settings.enabled} onChange={(e) => save({ enabled: e.target.checked })} /><span>Back up every night</span></label>
+        <label>At<input type="time" value={b.settings.time} onChange={(e) => save({ time: e.target.value || '03:00' })} /></label>
+        <label>Keep (days)<input type="number" min="1" max="60" value={b.settings.keep} onChange={(e) => save({ keep: Number(e.target.value) || 7 })} /></label>
+      </div>
+      {b.backups.length > 0 && (
+        <small className="muted">Latest: {b.backups.slice(0, 3).map((x) => `${x.name} (${formatBytes(x.size)})`).join(' · ')}{b.backups.length > 3 ? ` · ${b.backups.length - 3} more` : ''}</small>
+      )}
+      {msg && <span className={msg.startsWith('✓') ? 'ok' : 'error'}>{msg}</span>}
+    </div>
   );
 }

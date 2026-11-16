@@ -13,6 +13,7 @@ import { emit } from '../realtime.js';
 import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
 import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
+import { listBackups, backupNow, BACKUP_DIR } from '../backup.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
@@ -253,6 +254,12 @@ api.delete('/assistant/contacts/:id', (req, res) => {
 
 // --- AI engine ---
 api.get('/speech/status', (req, res) => res.json(speechStatus()));
+// --- Backups ---
+api.get('/backups', (req, res) => res.json({ backups: listBackups(), path: BACKUP_DIR, settings: getSetting('backup') }));
+api.post('/backups', wrap(async (req, res) => {
+  await backupNow();
+  res.json({ backups: listBackups(), path: BACKUP_DIR, settings: getSetting('backup') });
+}));
 // --- The AI's own voice ---
 api.get('/speak/status', (req, res) => res.json(speakStatus()));
 api.post('/speak/download', wrap(async (req, res) => {

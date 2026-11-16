@@ -1011,3 +1011,19 @@ test('owner help: unknown answers are asked to the owner, sent to the customer a
   assert.equal(await assistant.alertOwnerIfUrgent(mods.inbox.listConversations({ channel: 'whatsapp' })[0].id, 'ok'), undefined);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('backups: the database and WhatsApp login are copied, old ones are removed', async () => {
+  const backup = await import('../src/backup.js');
+  fs.mkdirSync(path.join(dataDir, 'whatsapp-auth'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'whatsapp-auth', 'creds.json'), '{}');
+  mods.settings.setSetting('backup', { enabled: true, time: '03:00', keep: 2 });
+  for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) await backup.backupNow(day);
+  const list = backup.listBackups();
+  assert.deepEqual(list.map((b) => b.name), ['2026-11-03', '2026-11-02']);
+  const dir = path.join(dataDir, 'backups', '2026-11-03');
+  assert.ok(fs.existsSync(path.join(dir, 'whatsapp-auth', 'creds.json')));
+  const Database = (await import('better-sqlite3')).default;
+  const copy = new Database(path.join(dir, 'agent.db'), { readonly: true });
+  assert.ok(copy.prepare('SELECT COUNT(*) AS n FROM messages').get().n > 0);
+  copy.close();
+});
