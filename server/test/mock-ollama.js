@@ -76,6 +76,13 @@ export function startMockOllama() {
         const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
       }
+      if (system.includes('learn from its human team')) {
+        const team = data.messages.at(-1).content;
+        const keep = /deliver/i.test(team);
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(keep
+          ? { keep: true, title: 'Delivery to Sharjah', question: 'Do you deliver to Sharjah?', answer: 'Yes, within 2 days for 20 AED.' }
+          : { keep: false }) } }));
+      }
       if (system.includes('You write WhatsApp replies for')) {
         const facts = system.match(/Owner's answer \(facts to use\): «([^»]*)»/)[1];
         return res.end(JSON.stringify({ message: { role: 'assistant', content: `Yes! ${facts}.` } }));

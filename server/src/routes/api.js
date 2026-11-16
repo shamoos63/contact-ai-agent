@@ -14,6 +14,8 @@ import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
 import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
 import { listBackups, backupNow, BACKUP_DIR } from '../backup.js';
+import { listSuggestions, decideSuggestions, reviewChats } from '../assistant/review.js';
+import { ownerConversationIds } from '../assistant/index.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
 import path from 'node:path';
@@ -254,6 +256,16 @@ api.delete('/assistant/contacts/:id', (req, res) => {
 
 // --- AI engine ---
 api.get('/speech/status', (req, res) => res.json(speechStatus()));
+// --- What the AI proposes to learn (approve or reject) ---
+api.get('/suggestions', (req, res) => res.json(listSuggestions({ status: req.query.status || 'pending' })));
+api.post('/suggestions/review', wrap(async (req, res) => {
+  const found = await reviewChats({ ownerConversationIds: ownerConversationIds() });
+  res.json({ added: found.added.length, open: found.open, pending: listSuggestions({ status: 'pending' }) });
+}));
+api.post('/suggestions/:id/:decision', (req, res) => {
+  decideSuggestions([Number(req.params.id)], req.params.decision === 'approve');
+  res.json(listSuggestions({ status: 'pending' }));
+});
 // --- Backups ---
 api.get('/backups', (req, res) => res.json({ backups: listBackups(), path: BACKUP_DIR, settings: getSetting('backup') }));
 api.post('/backups', wrap(async (req, res) => {

@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react';
 import { api, getSocket } from '../api.js';
 import { PageHeader, Pill } from '../components/ui.jsx';
 
-const KIND = { reminder: '⏰ Reminder', event: '📅 Appointment', message: '💬 Message', email: '✉️ Email', briefing: '☀️ Daily summary' };
+const KIND = { reminder: '⏰ Reminder', event: '📅 Appointment', message: '💬 Message', email: '✉️ Email', briefing: '☀️ Daily summary', review: '🧠 Self-review' };
 const TONE = { pending: 'warn', done: 'ok', failed: 'error', cancelled: 'muted' };
 const STATUS = { pending: 'Waiting', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
 const NEW_OWNER = { name: '', phone: '', telegram: '', enabled: true };

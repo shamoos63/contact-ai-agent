@@ -110,6 +110,21 @@ CREATE TABLE IF NOT EXISTS owner_contacts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_owner_contacts ON owner_contacts(owner_key);
+-- Things the AI proposes to learn (from the team's own replies, found in its weekly self-review).
+-- Nothing reaches Knowledge until an owner approves it.
+CREATE TABLE IF NOT EXISTS suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,             -- 'knowledge'
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  reason TEXT,
+  message_id INTEGER UNIQUE,      -- the message it was learned from (each one only once)
+  conversation_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  source_id INTEGER,              -- the Knowledge source it became
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  decided_at TEXT
+);
 
 CREATE TABLE IF NOT EXISTS email_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

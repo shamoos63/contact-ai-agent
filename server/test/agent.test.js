@@ -1027,3 +1027,40 @@ test('backups: the database and WhatsApp login are copied, old ones are removed'
   assert.ok(copy.prepare('SELECT COUNT(*) AS n FROM messages').get().n > 0);
   copy.close();
 });
+
+test('self-review: learns general answers from the team (with approval), never one customer\'s details', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'R', phone: '+963944717171' }] }));
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const ownerJid = '963944717171@s.whatsapp.net';
+  const owner = { channel: 'whatsapp', externalId: ownerJid, handle: '+963944717171', convMeta: { phone: '+963944717171' }, autoReply: false };
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const c1 = mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971500000201@s.whatsapp.net', handle: '+971500000201' });
+  const c2 = mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '971500000202@s.whatsapp.net', handle: '+971500000202' });
+  mods.inbox.updateConversation(c1, { auto_reply: false });
+  mods.inbox.updateConversation(c2, { auto_reply: false });
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971500000201@s.whatsapp.net', text: 'Do you deliver to Sharjah?', messageId: 'sr1' });
+  await mods.inbox.sendMessage(c1, 'Yes, we deliver to Sharjah within 2 days for 20 AED.', { sender: 'agent' });
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971500000202@s.whatsapp.net', text: 'any news?', messageId: 'sr2' });
+  await mods.inbox.sendMessage(c2, 'Hi Rana, your order 55 is ready for pickup.', { sender: 'agent' });
+
+  assistantAnswers.push({ action: 'self_review' });
+  mods.inbox.handleIncoming({ ...owner, text: 'review yourself', messageId: 'sr3' });
+  await wait(600);
+  const report = sent.filter((m) => m.to === ownerJid).at(-1).text;
+  assert.match(report, /🧠 My weekly self-review/);
+  assert.match(report, /1\. Delivery to Sharjah\n {3}Yes, within 2 days for 20 AED\./);
+  assert.doesNotMatch(report, /order 55/);
+
+  mods.inbox.handleIncoming({ ...owner, text: '1', messageId: 'sr4' });
+  await wait();
+  assert.match(sent.filter((m) => m.to === ownerJid).at(-1).text, /🧠 Learned 1: Delivery to Sharjah/);
+  assert.ok(mods.db.prepare("SELECT 1 FROM kb_sources WHERE title = '🧠 Delivery to Sharjah'").get());
+
+  // Looked-at replies aren't proposed again.
+  const review = await import('../src/assistant/review.js');
+  const again = await review.reviewChats({ ownerConversationIds: assistant.ownerConversationIds() });
+  assert.equal(again.added.length, 0);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

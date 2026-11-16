@@ -7,6 +7,7 @@ import { outboundSenders, teamContacts, simplify } from '../handoff.js';
 import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
 import { withoutPhoto, PHOTO_BLOCK } from '../ai/vision.js';
+import { reviewChats, reviewMessage, decideSuggestions } from './review.js';
 import { createSource, indexSource } from '../kb/index.js';
 import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
 
@@ -123,7 +124,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['answer_customer', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['answer_customer', 'self_review', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -170,6 +171,7 @@ function systemPrompt(owner, language) {
     '  cancel: cancel a task by its number (#).',
     '  summary: what happened today (new chats, requests passed to the team, tasks).',
     '  help: what you can do.',
+    '  self_review: the owner asks you to review your recent chats, learn from them or improve yourself ("review yourself", "شو تعلمت هالأسبوع", "راجع حالك", "improve yourself").',
     '  answer_customer: you just asked the owner about a customer\'s question you could not answer, and this message gives the answer. Put the answer in "text".',
     '  chat: anything else; answer briefly in "reply". Never say you did or will do something in a chat reply.',
     '  Any request to tell, message or talk to another person ("احكي مع", "قلو", "قلها", "ابعت لـ", "tell", "message") is send_message, never chat.',
@@ -330,7 +332,7 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
 }
 
 // --- Finding who to send to ---
-function ownerConversationIds() {
+export function ownerConversationIds() {
   return db
     .prepare("SELECT id FROM conversations WHERE channel IN ('whatsapp', 'telegram')")
     .all()
@@ -533,6 +535,13 @@ async function carryOut(action, conv, owner, language) {
     const id = createSource({ type: 'text', title: `${action.icon || '🌐'} ${action.title}`, origin: action.origin, content: action.content });
     indexSource(id).catch(() => {});
     return say(language, `📚 Added to Knowledge: "${action.title}". You can edit or delete it on the Knowledge page.`, `📚 انضافت للمعرفة: "${action.title}". فيك تعدلها أو تمسحها من صفحة Knowledge.`);
+  }
+  if (action.kind === 'review') {
+    const ids = action.picks ? action.picks.map((n) => action.ids[n - 1]).filter(Boolean) : action.ids;
+    const learned = decideSuggestions(ids, true);
+    decideSuggestions(action.ids.filter((id) => !ids.includes(id)), false);
+    if (!learned.length) return say(language, 'Nothing learned (those numbers are not on the list).', 'ما تعلمت شي (هالأرقام مو بالقائمة).');
+    return say(language, `🧠 Learned ${learned.length}: ${learned.map((s) => s.title).join(', ')}. They're on the Knowledge page.`, `🧠 تعلمت ${learned.length}: ${learned.map((s) => s.title).join('، ')}. موجودين بصفحة Knowledge.`);
   }
   if (action.kind === 'answer') {
     const msg = await sendMessage(action.conversationId, action.text, { sender: 'agent', voice: wantsVoice(action.conversationId, 'customer'), meta: { byAssistant: owner?.name || true } });
@@ -799,6 +808,14 @@ async function act(cmd, conv, owner, language) {
         return `⚠️ ${err.message.startsWith("Couldn't reach") ? say(language, "I couldn't reach the internet. Please try again in a moment.", 'ما قدرت اوصل للإنترنت. جرب كمان شوي.') : err.message}`;
       }
     }
+    case 'self_review': {
+      await sendMessage(conv.id, say(language, '🧠 Reading this week\'s chats…', '🧠 عم اقرا محادثات هالأسبوع…'), { sender: 'ai', meta: { assistant: true } });
+      const found = await reviewChats({ ownerConversationIds: ownerConversationIds() });
+      const msg = reviewMessage(found, language);
+      if (!msg) return say(language, 'I looked at this week\'s chats: nothing new to learn, and no open questions. 👌', 'راجعت محادثات هالأسبوع: ما في شي جديد اتعلمه، ولا أسئلة بلا جواب. 👌');
+      if (msg.ids.length) updateMeta(conv.id, { assistantPending: { action: { kind: 'review', ids: msg.ids }, at: Date.now() } });
+      return msg.text;
+    }
     case 'answer_customer': {
       const q = conv.meta.assistantQuestion;
       const answer = withoutPhoto(cmd.said) || cmd.text;
@@ -886,8 +903,16 @@ async function processOwnerMessage(conversationId, messageId = null) {
       }
     }
     const pending = conv.meta.assistantPending;
-    if (pending && Date.now() - pending.at < CONFIRM_MINUTES * 60e3) {
+    const pendingFor = pending?.action?.kind === 'review' ? 24 * 60 : CONFIRM_MINUTES;
+    if (pending && Date.now() - pending.at < pendingFor * 60e3) {
       const word = firstWord(text);
+      // The weekly review: "1 3" learns those and skips the rest.
+      const picks = pending.action.kind === 'review' && /^[\s\d٠-٩,،و&and]+$/i.test(text) && /[\d٠-٩]/.test(text)
+        ? [...text.replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).matchAll(/\d+/g)].map((m) => Number(m[0])) : null;
+      if (picks) {
+        updateMeta(conversationId, { assistantPending: null });
+        return await reply(await carryOut({ ...pending.action, picks }, conv, owner, language));
+      }
       if (YES.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
         return await reply(await carryOut(pending.action, conv, owner, language));
@@ -895,7 +920,9 @@ async function processOwnerMessage(conversationId, messageId = null) {
       if (NO.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
         const kind = pending.action.kind;
+        if (kind === 'review') decideSuggestions(pending.action.ids, false);
         return await reply(kind === 'forget' ? say(language, 'OK, kept.', 'تمام، ما مسحت شي.')
+          : kind === 'review' ? say(language, "OK, I won't learn those.", 'تمام، ما رح اتعلمهم.')
           : kind === 'learn' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
             : say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
@@ -979,6 +1006,35 @@ async function runTask(t, now) {
 }
 
 // Send each owner the day's summary once, at the time set under Assistant.
+// Once a week (default Sunday 10:00), the self-review goes to the first owner.
+async function weeklyReview(now) {
+  const s = assistantSettings();
+  const r = getSetting('self_review');
+  if (!s.enabled || !r.enabled) return;
+  const tz = timeZone();
+  const local = toLocal(now, tz);
+  const weekday = new Date(Date.parse(`${local.slice(0, 10)}T12:00:00Z`)).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+  if (weekday !== r.day) return;
+  const at = fromLocal(`${local.slice(0, 10)} ${r.time || '10:00'}`, tz);
+  if (!at || now < at || now.getTime() - at.getTime() > 6 * 3600e3) return;
+  if (db.prepare("SELECT 1 FROM tasks WHERE kind = 'review' AND run_at = ?").get(at.toISOString())) return;
+  const id = firstOwnerConversation();
+  if (!id) return;
+  const owner = ownerOf(getConversation(id));
+  const language = ownerLanguage(id);
+  const taskId = insertTask({ kind: 'review', conv: { id }, owner, runAt: at, payload: { language } });
+  try {
+    const msg = reviewMessage(await reviewChats({ ownerConversationIds: ownerConversationIds() }), language);
+    if (msg) {
+      await sendMessage(id, msg.text, { sender: 'ai', voice: false, meta: { assistant: true } });
+      if (msg.ids.length) updateMeta(id, { assistantPending: { action: { kind: 'review', ids: msg.ids }, at: Date.now() } });
+    }
+    finishTask(taskId, 'done', msg ? 'Sent' : 'Nothing to report');
+  } catch (err) {
+    finishTask(taskId, 'failed', err.message);
+  }
+}
+
 async function dailyBriefings(now) {
   const s = assistantSettings();
   if (!s.enabled || !s.daily_briefing) return;
@@ -1006,7 +1062,7 @@ export async function runDueTasks(now = new Date()) {
   if (running) return;
   running = true;
   try {
-    const due = db.prepare("SELECT * FROM tasks WHERE status = 'pending' AND kind <> 'briefing' AND run_at <= ? ORDER BY run_at").all(now.toISOString());
+    const due = db.prepare("SELECT * FROM tasks WHERE status = 'pending' AND kind NOT IN ('briefing', 'review') AND run_at <= ? ORDER BY run_at").all(now.toISOString());
     for (const t of due) {
       try {
         await runTask(t, now);
@@ -1017,6 +1073,7 @@ export async function runDueTasks(now = new Date()) {
       }
     }
     await dailyBriefings(now);
+    weeklyReview(now).catch((err) => console.error('[assistant] Weekly review:', err.message));
   } finally {
     running = false;
   }

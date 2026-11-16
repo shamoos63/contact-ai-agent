@@ -23,6 +23,8 @@ export const DEFAULTS = {
   vision: { enabled: true, model: 'qwen2.5vl:7b' },
   // Daily copy of the database and WhatsApp login into data/backups (local time of the assistant's time zone).
   backup: { enabled: true, time: '03:00', keep: 7 },
+  // Weekly self-review: the AI reads the week's chats and proposes what to learn (owner approves).
+  self_review: { enabled: true, day: 'Sunday', time: '10:00' },
   // The AI's own voice (Piper). For owners and customers: 'off', 'mirror' (answer a voice note with
   // a voice note) or 'always'. also_text: send the written reply too.
   speak: { enabled: false, voice_en: 'en_GB-alan-medium', voice_ar: 'ar_JO-kareem-medium', owners: 'mirror', customers: 'off', also_text: true, speed: 1 },
