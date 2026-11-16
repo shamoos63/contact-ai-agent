@@ -273,3 +273,9 @@ ol { margin: 6px 0 10px; padding-inline-start: 22px; line-height: 1.7; }
 .msg.draft .bubble { background: var(--panel); border: 1px dashed var(--border); }
 .msg.draft textarea { width: 100%; min-width: 260px; margin: 6px 0; }
 .msg.draft .row { margin-top: 6px; gap: 6px; }
+.products { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 10px; }
+.product { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid var(--border); border-radius: 10px; flex-wrap: wrap; }
+.product img, .product .no-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; background: var(--panel-2); display: grid; place-items: center; }
+.product .clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.file-pick { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+button.link { background: none; border: none; padding: 0; cursor: pointer; }

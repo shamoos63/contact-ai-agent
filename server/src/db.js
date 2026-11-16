@@ -136,6 +136,18 @@ CREATE TABLE IF NOT EXISTS wishes (
   last_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 -- Draft mode: replies on topics the owner hasn't approved enough times yet wait for the owner.
+CREATE TABLE IF NOT EXISTS products (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  price TEXT,
+  description TEXT,
+  image TEXT,
+  in_stock INTEGER NOT NULL DEFAULT 1,
+  source_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS drafts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   conversation_id INTEGER NOT NULL,

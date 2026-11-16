@@ -34,6 +34,7 @@ export const DEFAULTS = {
   },
   // Short notes per customer (name, what they want, preferences), used in the next replies.
   customer_memory: { enabled: true },
+  catalog: { send_photos: true },
   // Draft mode: on topics the owner has approved fewer than `approvals` times, the AI's answer goes
   // to the first owner first; `hold_message` tells the customer it will take a moment.
   drafts: { enabled: false, approvals: 3, hold_message: true },

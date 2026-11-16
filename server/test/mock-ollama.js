@@ -136,6 +136,9 @@ export function startMockOllama() {
           return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Sorry to hear that! Which device is it, what is the problem, and where are you? [ASK: Maintenance request]' } }));
         }
       }
+      if (/iphone 15 pro/i.test(lastUser) && system.includes('Product: iPhone 15 Pro')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: system.includes('out of stock') ? 'Sorry, the iPhone 15 Pro is out of stock at the moment.' : 'The iPhone 15 Pro costs 3,999 AED and is in stock.' } }));
+      }
       if (/warranty/i.test(lastUser)) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'I am not sure about that. A member of our team will get back to you soon. [UNSURE]' } }));
       }

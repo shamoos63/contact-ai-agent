@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { chat } from '../ai/ollama.js';
 import { detectLanguage } from '../ai/agent.js';
-import { getConversation, sendMessage, updateMeta, ensureConversation, wantsVoice } from '../inbox.js';
+import { getConversation, sendMessage, updateMeta, ensureConversation, wantsVoice, sendProductPhotos } from '../inbox.js';
 import { outboundSenders, teamContacts, simplify } from '../handoff.js';
 import { emit } from '../realtime.js';
 import { webSearch, readPage, firstUrl } from '../web.js';
@@ -1471,6 +1471,7 @@ export async function decideDraft(draftId, { send, text = null, by = null }) {
       else db.prepare('INSERT INTO trust (source_id, approvals) VALUES (?, 1) ON CONFLICT(source_id) DO UPDATE SET approvals = approvals + 1').run(d.source_id);
     }
     if (own && d.question) saveStyleExample(d.question, d.text, own);
+    if (d.source_id && !msg?.error) await sendProductPhotos(d.conversation_id, own || d.text, [d.source_id]).catch(() => {});
   }
   db.prepare("UPDATE drafts SET status = ?, final_text = ?, decided_at = datetime('now') WHERE id = ?").run(status, own, d.id);
   emit('drafts', { conversationId: d.conversation_id });

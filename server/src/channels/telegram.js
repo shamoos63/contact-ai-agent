@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { getSetting } from '../settings.js';
-import { handleIncoming, registerSender, registerVoiceSender } from '../inbox.js';
+import { handleIncoming, registerSender, registerVoiceSender, registerImageSender } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 
 let bot = null;
@@ -96,5 +96,11 @@ registerSender('telegram', async (conv, text) => {
 registerVoiceSender('telegram', async (conv, audio) => {
   if (!bot) throw new Error('Telegram bot is not running');
   const sent = await bot.api.sendVoice(conv.external_id, new InputFile(audio, 'voice.ogg'));
+  return { externalId: `${conv.external_id}:${sent.message_id}` };
+});
+
+registerImageSender('telegram', async (conv, image, caption) => {
+  if (!bot) throw new Error('Telegram bot is not running');
+  const sent = await bot.api.sendPhoto(conv.external_id, new InputFile(image, 'photo.jpg'), caption ? { caption } : {});
   return { externalId: `${conv.external_id}:${sent.message_id}` };
 });

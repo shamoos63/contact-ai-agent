@@ -262,11 +262,11 @@ function Bubble({ m }) {
       <div className="bubble photo">
         <a href={`/api/media/${meta.image}`} target="_blank" rel="noreferrer"><img src={`/api/media/${meta.image}`} alt="" loading="lazy" /></a>
         {meta.caption && <div dir="auto">{meta.caption}</div>}
-        <div className="voice-text small" dir="auto">
+        {!meta.sent && <div className="voice-text small" dir="auto">
           <ImageIcon size={13} />
           {seen ? <span className="muted" title="What the AI understood from the photo">{seen}</span>
             : <span className="muted">{meta.imageError === 'off' ? 'Photos are not read by the AI' : 'Could not read this photo'}</span>}
-        </div>
+        </div>}
       </div>
     );
   }

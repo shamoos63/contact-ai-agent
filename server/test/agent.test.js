@@ -1271,3 +1271,42 @@ test('drafts: new topics wait for the owner, their edits teach the style, approv
   mods.settings.setSetting('drafts', { enabled: false, approvals: 3, hold_message: true });
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('catalog: products become knowledge, and their photo goes with answers about them', async () => {
+  const catalog = await import('../src/catalog.js');
+  const sharp = (await import('sharp')).default;
+  const png = await sharp({ create: { width: 40, height: 30, channels: 3, background: '#c00' } }).png().toBuffer();
+  const image = await catalog.saveProductImage(png);
+  const p = await catalog.saveProduct({ name: 'iPhone 15 Pro', price: '3,999 AED', description: 'Titanium, 256GB, 1 year warranty', image, in_stock: '1' });
+  const src = mods.db.prepare('SELECT * FROM kb_sources WHERE id = ?').get(p.source_id);
+  assert.equal(src.title, '🛍️ iPhone 15 Pro');
+  assert.match(src.content, /Price: 3,999 AED\nAvailable: yes/);
+  assert.equal(src.status, 'ready');
+
+  const sent = [];
+  mods.inbox.registerSender('telegram', async (conv, text) => sent.push({ kind: 'text', text }));
+  mods.inbox.registerImageSender('telegram', async (conv, img, caption) => sent.push({ kind: 'photo', caption, bytes: img.length }));
+  const wait = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+  const customer = { channel: 'telegram', externalId: '555000111', name: 'Lina', handle: '@lina' };
+  mods.inbox.handleIncoming({ ...customer, text: 'How much is the iPhone 15 Pro?', messageId: 'ct1' });
+  await wait();
+  assert.deepEqual(sent.map((m) => m.kind), ['text', 'photo']);
+  assert.equal(sent[0].text, 'The iPhone 15 Pro costs 3,999 AED and is in stock.');
+  assert.equal(sent[1].caption, 'iPhone 15 Pro · 3,999 AED');
+  // Not again the same day.
+  mods.inbox.handleIncoming({ ...customer, text: 'Is the iPhone 15 Pro still available?', messageId: 'ct2' });
+  await wait();
+  assert.deepEqual(sent.map((m) => m.kind), ['text', 'photo', 'text']);
+
+  // Out of stock: the knowledge follows.
+  await catalog.saveProduct({ id: p.id, name: 'iPhone 15 Pro', price: '3,999 AED', description: 'Titanium', in_stock: '0' });
+  assert.match(mods.db.prepare('SELECT content FROM kb_sources WHERE id = ?').get(p.source_id).content, /out of stock/);
+  assert.equal(mods.db.prepare('SELECT image FROM products WHERE id = ?').get(p.id).image, image); // photo kept
+  mods.inbox.handleIncoming({ ...customer, text: 'iphone 15 pro?', messageId: 'ct3' });
+  await wait();
+  assert.equal(sent.at(-1).text, 'Sorry, the iPhone 15 Pro is out of stock at the moment.');
+
+  // Deleting removes its knowledge too.
+  assert.ok(catalog.deleteProduct(p.id));
+  assert.equal(mods.db.prepare('SELECT 1 FROM kb_sources WHERE id = ?').get(p.source_id), undefined);
+});

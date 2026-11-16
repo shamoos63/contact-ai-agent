@@ -131,6 +131,12 @@ Nothing below changes the AI's code, and nothing reaches Knowledge without your 
 - **Weekly report:** chats, busiest hours and day, top topics, unanswered questions and quiet leads, every Sunday at 10:00 with the self-review, or ask "weekly report" / "تقرير الأسبوع".
 - **Customer memory:** short notes per customer (name, what they want, preferences) are written when a chat pauses, used in later replies and shown at the top of the chat in the inbox. Ask "what do you know about Rana" / "شو بتعرف عن رنا".
 
+### Draft mode and learning your style
+Turn on **Draft mode** on the Assistant page while the AI is new. When a customer asks about a topic you haven't approved yet, the AI tells them "one moment" and sends you its answer on WhatsApp: reply "yes" to send it, "no" to skip it, or just write your own answer and that is sent instead. The same draft shows in the inbox with **Send**, **Edit** and **Discard**. After 3 "yes" in a row on a topic (the knowledge source it answered from), that topic is trusted and answers go straight out; any correction starts the count again. Your corrections, and replies your team types right after an AI answer, are kept as examples of how you answer and shown to the AI, so it picks up your tone and wording (facts still come only from Knowledge). Unknown questions, handoffs and owner chats never wait as drafts.
+
+### Catalog
+The **Catalog** page holds your products: name, price, description, photo and stock. Each product is also a Knowledge source (🛍️ name), so the AI answers prices and availability from it, and when its answer names a product with a photo, the photo is sent after the answer on WhatsApp and Telegram (once a day per chat; turn it off on the Catalog page). Marking a product out of stock updates what the AI says at once. A customer's photo of a product is matched through what the photo shows.
+
 ### Backups
 Every night (03:00 in the assistant's time zone) the database and the WhatsApp login are copied into `data/backups/<date>`; the last 7 are kept. **Settings → Backups** has *Back up now*. To restore, stop the app and copy the files of a backup back into `data`. Keep a copy on another disk too.
 

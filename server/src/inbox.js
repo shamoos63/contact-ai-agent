@@ -5,6 +5,10 @@ import { generateReply } from './ai/agent.js';
 import { afterReply } from './handoff.js';
 import { isOwnerConversation, handleOwnerMessage, askOwnerAbout, alertOwnerIfUrgent, holdForDraft } from './assistant/index.js';
 import { speak, saveVoiceNote } from './ai/tts.js';
+import { productPhotosFor } from './catalog.js';
+import { MEDIA_DIR } from './voice.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const senders = new Map(); // channel -> async (conversation, text) => { externalId? }
 const voiceSenders = new Map(); // channel -> async (conversation, oggBuffer) => { externalId? }
@@ -14,6 +18,35 @@ export function registerSender(channel, fn) {
 }
 export function registerVoiceSender(channel, fn) {
   voiceSenders.set(channel, fn);
+}
+const imageSenders = new Map(); // channel -> async (conversation, jpegBuffer, caption) => { externalId? }
+export function registerImageSender(channel, fn) {
+  imageSenders.set(channel, fn);
+}
+
+// Send a saved photo (data/media) with a short caption.
+export async function sendImage(conversationId, file, caption = '', { sender = 'ai', meta } = {}) {
+  const conv = conversationRow(conversationId);
+  if (!conv) throw new Error('Conversation not found');
+  let externalId = null;
+  let error = null;
+  try {
+    if (!imageSenders.has(conv.channel)) throw new Error(`Photos can't be sent on ${conv.channel}`);
+    externalId = (await imageSenders.get(conv.channel)(conv, fs.readFileSync(path.join(MEDIA_DIR, file)), caption))?.externalId || null;
+  } catch (err) {
+    error = err.message;
+    console.error(`[inbox] Sending a photo on ${conv.channel} failed:`, err.message);
+  }
+  return insertMessage({ conversationId, direction: 'out', sender, text: caption || '📷 Photo', externalId, meta: { ...meta, image: file, caption: caption || null, sent: true }, error });
+}
+
+// The reply was about products with photos: send them too.
+export async function sendProductPhotos(conversationId, reply, sourceIds) {
+  const conv = conversationRow(conversationId);
+  if (!conv || !imageSenders.has(conv.channel)) return;
+  for (const p of productPhotosFor(conversationId, reply, sourceIds)) {
+    await sendImage(conversationId, p.image, [p.name, p.price].filter(Boolean).join(' · '), { meta: { product: p.id } });
+  }
 }
 
 // Should this reply be spoken? audience: 'owner' or 'customer'. "mirror" answers a voice note
@@ -141,6 +174,7 @@ async function autoReply(conversationId, { force = false } = {}) {
     // Draft mode: an answer on a topic the owner hasn't approved enough yet waits for them.
     if (!force && !tag && !unsure && await holdForDraft(conversationId, reply, sources)) return;
     await sendMessage(conversationId, reply, { sender: 'ai', voice: wantsVoice(conversationId, 'customer'), meta: { sources: sources.map((s) => ({ title: s.title, score: s.score })), ...(unsure ? { unsure: true } : {}) } });
+    if (!tag) await sendProductPhotos(conversationId, reply, sources.map((s) => s.source_id)).catch((err) => console.warn('[catalog] Photo not sent:', err.message));
     afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
     // The AI didn't know: ask the owner, who can answer by chat (sent to the customer and remembered).
     if (unsure && !tag) askOwnerAbout(conversationId).catch((err) => console.error('[assistant] Asking the owner failed:', err.message));

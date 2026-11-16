@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import { listProducts, saveProduct, deleteProduct, saveProductImage } from '../catalog.js';
 import { db } from '../db.js';
 import { login, changePassword, requireAuth, setSessionCookie, clearSessionCookie } from '../auth.js';
 import { getAllSettings, setSetting, getSetting, SETTING_KEYS } from '../settings.js';
@@ -280,6 +281,29 @@ api.post('/wishes/:id/done', (req, res) => {
   res.json(listWishes());
 });
 // --- What the AI proposes to learn (approve or reject) ---
+// Product catalog (a photo can come with the form as "image").
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+api.get('/products', (req, res) => res.json(listProducts()));
+const productBody = async (req) => {
+  const image = req.file ? await saveProductImage(req.file.buffer) : null;
+  return { ...req.body, image };
+};
+api.post('/products', imageUpload.single('image'), wrap(async (req, res) => {
+  try {
+    res.json(await saveProduct(await productBody(req)));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}));
+api.put('/products/:id', imageUpload.single('image'), wrap(async (req, res) => {
+  try {
+    res.json(await saveProduct({ ...(await productBody(req)), id: Number(req.params.id) }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}));
+api.delete('/products/:id', (req, res) => res.json({ ok: deleteProduct(Number(req.params.id)) }));
+
 // Draft mode: answers waiting for the owner, and the team's own replies the AI learns its style from.
 api.get('/drafts', (req, res) => res.json(listDrafts(req.query.conversation ? Number(req.query.conversation) : null)));
 api.post('/drafts/:id/send', wrap(async (req, res) => {
