@@ -165,6 +165,11 @@ export function handleIncoming({ channel, accountId, externalId, name, handle, s
 
   const conversationId = upsertConversation({ channel, accountId, externalId, name, handle, subject, meta: convMeta });
   const stored = insertMessage({ conversationId, direction: 'in', sender: 'customer', text: text.trim(), externalId: messageId, meta });
+  // Who has spoken in a group, so the AI knows who is in it.
+  if (meta?.group && meta.from) {
+    const members = conversationRow(conversationId).meta.members || [];
+    if (!members.includes(meta.from)) updateMeta(conversationId, { members: [...members, meta.from].slice(-40) });
+  }
   // Numbers chosen under Assistant give the bot tasks instead of getting customer answers.
   if ((channel === 'whatsapp' || channel === 'telegram') && !meta?.transcribeError && isOwnerConversation(conversationId)) {
     handleOwnerMessage(conversationId, stored.id).catch(() => {});

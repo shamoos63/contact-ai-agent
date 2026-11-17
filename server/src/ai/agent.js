@@ -53,6 +53,8 @@ export function buildRulesPrompt(conv = null) {
   ];
   if (conv?.meta?.group) {
     parts.push('GROUP CHAT: this is a WhatsApp group. Each message starts with the name of the person who wrote it ("Name: text"). Answer the last person who spoke to you, by name, briefly. Do not answer messages that were meant for other people in the group, and never start your reply with your own name and a colon.');
+    if (conv.meta.members?.length) parts.push(`People who have written in this group so far: ${conv.meta.members.join(', ')}. If asked who is in the group, name them (you only know the people who have written).`);
+    parts.push('In the group, when the knowledge does not answer, say briefly that you don\'t know, in one short line; never say the team will contact them.');
   }
   if (rules.length) {
     parts.push('', 'REDIRECT RULES (when a rule applies, include its exact link or phone number in your reply):');
@@ -154,7 +156,7 @@ export async function answer(messages, { conv = null } = {}) {
     reply = takeTags(again.replace(UNSURE_ALL, '')).reply;
     if (wrongLanguage(reply, language)) reply = '';
   }
-  const fallback = getSetting('fallback_message');
+  const fallback = conv?.meta?.group ? (language === 'Arabic' ? 'ما عندي جواب عهالسؤال 🙏' : "Sorry, I don't know that one.") : getSetting('fallback_message');
   if (!reply || reply.trim() === fallback.trim()) unsure = true;
   return { reply: reply || fallback, sources: knowledge, language, tag, unsure };
 }

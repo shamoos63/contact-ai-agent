@@ -1375,7 +1375,12 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   // 1. "Who should I send it to?" is asked once; an answer that isn't a name is a new request, read on its own.
   const first = await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm1');
   assert.match(first, /لمين بدك ابعتها/);
-  assert.equal(await says('الي هون', { action: 'chat', reply: 'تمام' }, 'sm2'), 'تمام');
+  // "الي هون" (to me, here) sends it to the owner.
+  assert.match(await says('الي هون', null, 'sm2'), /واتساب إلى Hisham \(\+971508181818\)/);
+  await says('no', null, 'sm2b');
+  // An answer that isn't a name is read on its own, without the old request.
+  await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm2c');
+  assert.equal(await says('شو الطقس', { action: 'chat', reply: 'مشمس' }, 'sm2d'), 'مشمس');
   assert.equal(lastAssistantTurns.value, 1);
   // A name and a number answer it: the number is used and saved under that name.
   await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm3');
@@ -1424,5 +1429,23 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   mods.kb.setSourceAudience(cv, 'owner');
   assert.ok(!(await mods.kb.search('full-stack developer mobile apps', { minScore: 0.1, audience: 'customers' })).some((r) => r.source_id === Number(cv)));
   assert.match(mods.agent.buildRulesPrompt(null), /IDENTITY: you are the AI assistant of/);
+
+  // 9. A name the owner used ("لسامر") is kept, so the number sent next is saved under it.
+  assert.match(await says('ابعت لسامر انو وصلت', { action: 'send_message', to: null, text: 'وصلت' }, 'sm11'), /ما عندي رقم سامر/);
+  assert.match(await says('+971 50 333 4455', null, 'sm12'), /📇 حفظت سامر/);
+  await says('no', null, 'sm13');
+  // A placeholder is not a person.
+  assert.equal(assistant.fixCommand({ action: 'send_message', to: 'اسم المستلم' }, 'ابعت رسالة', 'Arabic').to, null);
+  // A complaint is not a request for the help list.
+  assert.match(await says('انت ما عم تفهم علي', { action: 'help' }, 'sm14'), /ما فهمت عليك/);
+  assert.doesNotMatch(await says('شو بتعرف تساوي؟', { action: 'help' }, 'sm15'), /ما فهمت عليك/);
+
+  // 10. Groups: the AI knows who has written, and never promises the team will call.
+  const g = { channel: 'whatsapp', externalId: '1203630000@g.us', name: 'Team', handle: 'group', convMeta: { group: true }, autoReply: false };
+  mods.inbox.handleIncoming({ ...g, text: 'Rami: hi', messageId: 'sm16', meta: { group: true, from: 'Rami' } });
+  const gid = mods.inbox.handleIncoming({ ...g, text: 'Lina: hello', messageId: 'sm17', meta: { group: true, from: 'Lina' } });
+  const rules = mods.agent.buildRulesPrompt(mods.inbox.getConversation(gid));
+  assert.match(rules, /written in this group so far: Rami, Lina/);
+  assert.match(rules, /never say the team will contact them/);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
