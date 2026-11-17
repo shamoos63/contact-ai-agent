@@ -429,6 +429,22 @@ export function templateDraft(said, name, relation, who, company, language, intr
   const out = introLine ? [top, body].filter(Boolean).join(' ') : [top, body].filter(Boolean).join(ar ? '، ' : ', ');
   return out || null;
 }
+// Reasons and thanks the owner didn't give ("لأنو بحاجة إلو…", "شكراً!"), and sentences that share
+// nothing with the request, are cut. The first sentence (greeting and point) always stays.
+const REASON = /[،,]?\s*(لأنو|لانو|لأنه|لانه|لأن|لان|مشان|عشان|because|since)\s[^.!؟?\n]*/gi;
+const THANKS = /(^|\s)(شكراً|شكرا|مشكور|يسلمو|thanks|thank you)[!.]?(?=\s|$)/gi;
+export function tighten(text, said) {
+  let t = String(text || '');
+  if (!REASON.test(said)) t = t.replace(REASON, '');
+  REASON.lastIndex = 0;
+  if (!THANKS.test(said)) t = t.replace(THANKS, '$1');
+  THANKS.lastIndex = 0;
+  const point = nameWords(pointOf(withoutPhoto(said), '', null)).map(skeleton).filter((k) => k.length >= 2);
+  const parts = sentencesOf(t);
+  const kept = parts.filter((x, i) => i === 0 || !point.length || nameWords(x).map(skeleton).some((h) => h.length >= 2 && point.some((k) => h.includes(k) || k.includes(h))));
+  return kept.join('').replace(/\s+([،,.!؟?])/g, '$1').replace(/[،,]\s*([.!؟?]|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
+}
+
 // The draft keeps the point of the request ("اتأخر", "وصلت"): at least half of its main words.
 function keepsPoint(text, said, intro) {
   const point = pointOf(withoutPhoto(said), '', null);
@@ -500,6 +516,7 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
     if (relation) out = out.replace(new RegExp(`^\\s*${relation}[،,!:]?\\s*`), '');
     // "أخبرك إني رح اتأخر" reads stiff: just say it.
     out = out.replace(/(^|[،,.!]\s*)(حبيت\s+)?(أخبرك|اخبرك|بخبرك|أحب أن أخبرك|أود أن أخبرك|أود إخبارك)\s+(ب?إني|ب?اني|إنو|انو|أن|ان|بأن|بأني)\s+/u, '$1');
+    out = tighten(out, said);
     if (out && !CJK.test(out) && !copiesCommand(out, said)) return cleanDraft(out, target);
     if (cmd.text && draftFits(cmd.text, cmd.said) && !copiesCommand(cmd.text, said)) return cmd.text;
     return null;
