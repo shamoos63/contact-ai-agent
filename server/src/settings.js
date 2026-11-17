@@ -43,6 +43,13 @@ export const DEFAULTS = {
   self_review: { enabled: true, day: 'Sunday', time: '10:00', report: true },
   // The AI's own voice (Piper). For owners and customers: 'off', 'mirror' (answer a voice note with
   // a voice note) or 'always'. also_text: send the written reply too.
+  // The Android companion app on the business phone.
+  app: {
+    missed_call_reply: false, // message callers on WhatsApp when nobody answered their call
+    missed_call_cooldown_hours: 12,
+    missed_call_en: 'Hi! Sorry we missed your call at {company}. How can we help you? You can write here or send a voice note.',
+    missed_call_ar: 'مرحبا! عذراً ما قدرنا نرد على اتصالك. كيف فينا نساعدك؟ فيك تكتبلنا هون أو تبعت رسالة صوتية.',
+  },
   speak: { enabled: false, voice_en: 'en_GB-alan-medium', voice_ar: 'ar_JO-kareem-medium', owners: 'mirror', customers: 'off', also_text: true, speed: 1 },
   // Team handoff: requests the AI passes to a person, grouped by topic (sales, maintenance, ...).
   handoff: {

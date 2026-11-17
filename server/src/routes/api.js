@@ -20,6 +20,7 @@ import { ownerConversationIds, listDrafts, decideDraft, afterDraftDecision, lear
 import { listSkills, removeSkill, setSkillEnabled, addSkill, listWishes, setWishDone } from '../assistant/skills.js';
 import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts, saveOwnerContact, deleteOwnerContact } from '../assistant/index.js';
 import { MEDIA_DIR } from '../voice.js';
+import { device } from './device.js';
 import path from 'node:path';
 import { logoutWhatsApp } from '../channels/whatsapp.js';
 import { listAccounts, testAccount, PRESETS } from '../channels/email.js';
@@ -43,6 +44,9 @@ api.post('/logout', (req, res) => {
 });
 
 api.use(requireAuth);
+
+// The Android companion app (same sign-in as the dashboard).
+api.use('/app', device);
 
 api.get('/me', (req, res) => res.json({ username: req.user.sub }));
 api.post('/password', (req, res) => {
