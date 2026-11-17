@@ -1453,6 +1453,8 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   assert.equal(assistant.templateDraft('ابعت لمرتي انو اشتقتلها', '', 'مرتي', 'هشام', 'توب تك', 'Arabic', false), 'اشتقتلك');
   assert.equal(assistant.templateDraft('قلو لغيث اسألو اذا الطلب جاهز', 'غيث', null, 'هشام', 'توب تك', 'Arabic', false), 'مرحبا غيث، الطلب جاهز؟');
   assert.equal(assistant.normalizeAssistant({ owners: [{ name: 'Hisham', name_ar: 'هشام', phone: '+971501' }], company_ar: 'توب تك' }).company_ar, 'توب تك');
+  assert.equal(assistant.tighten('بدي منك تجيب معك الفواتير بكرا، لأنو بحاجة إلو قبل ما نبدأ العمل. شكراً!', 'قلو لغيث يجيب معو الفواتير بكرا'), 'بدي منك تجيب معك الفواتير بكرا.');
+  assert.equal(assistant.tighten('مرحبا غيث. الفواتير بكرا. الطقس حلو اليوم.', 'قلو لغيث يجيب معو الفواتير بكرا'), 'مرحبا غيث. الفواتير بكرا.');
   // A name given with a new number is remembered.
   assert.ok(assistant.listOwnerContacts(key).some((c) => c.name === 'نورس'));
 
