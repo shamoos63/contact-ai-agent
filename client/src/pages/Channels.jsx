@@ -56,7 +56,7 @@ function WhatsApp({ status, settings, save }) {
       </div>
       <p className="muted small">Links like WhatsApp Web. Use a separate business number: WhatsApp can ban numbers it thinks are automated.</p>
       <label className="switch">
-        <input type="checkbox" checked={!!settings.enabled} onChange={(e) => save({ whatsapp: { enabled: e.target.checked } })} />
+        <input type="checkbox" checked={!!settings.enabled} onChange={(e) => save({ whatsapp: { ...settings, enabled: e.target.checked } })} />
         <span>Enabled</span>
       </label>
       {status.status === 'qr' && status.qr && (
@@ -66,6 +66,20 @@ function WhatsApp({ status, settings, save }) {
         </div>
       )}
       {status.status === 'connected' && <p>Linked as <strong>{status.me}</strong></p>}
+      <label>
+        In groups (add the number to a WhatsApp group)
+        <select value={settings.groups || 'mention'} onChange={(e) => save({ whatsapp: { ...settings, groups: e.target.value } })}>
+          <option value="mention">Answer when mentioned, replied to, or called by name</option>
+          <option value="all">Answer every message</option>
+          <option value="off">Don't answer in groups</option>
+        </select>
+      </label>
+      {(settings.groups || 'mention') === 'mention' && (
+        <label>
+          Names it answers to (comma-separated; the company name always works)
+          <input dir="auto" defaultValue={settings.group_names || ''} placeholder="Jarvis, جارفس" onBlur={(e) => e.target.value !== (settings.group_names || '') && save({ whatsapp: { ...settings, group_names: e.target.value } })} />
+        </label>
+      )}
       {settings.enabled && (
         <div className="row">
           <button onClick={() => api('/channels/whatsapp/restart', { method: 'POST' })}>Reconnect</button>

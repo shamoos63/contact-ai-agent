@@ -1326,3 +1326,29 @@ test('presence: customers see "typing…" (or "recording…" for voice replies) 
   mods.inbox.showPresenceForIncoming({ channel: 'telegram', externalId: '555000222' })();
   assert.deepEqual(states, []);
 });
+
+test('groups: the AI answers in a group only when addressed, knows who spoke, and never follows up there', async () => {
+  const { addressedInGroup } = await import('../src/channels/whatsapp.js');
+  const me = ['971500000001:12@s.whatsapp.net', '123456789012345@lid'];
+  const g = { mode: 'mention', names: 'Jarvis, جارفس' };
+  assert.equal(addressedInGroup({ text: 'hi all' }, me, g), false);
+  assert.equal(addressedInGroup({ text: '@123456789012345 price?', mentioned: ['123456789012345@lid'] }, me, g), true);
+  assert.equal(addressedInGroup({ text: 'ok thanks', quotedFrom: '971500000001@s.whatsapp.net' }, me, g), true);
+  assert.equal(addressedInGroup({ text: 'Jarvis, what time do you open?' }, me, g), true);
+  assert.equal(addressedInGroup({ text: 'يا جارفس شو الأسعار' }, me, g), true);
+  assert.equal(addressedInGroup({ text: 'jarvisx' }, me, g), false);
+  assert.equal(addressedInGroup({ text: 'hi all' }, me, { ...g, mode: 'all' }), true);
+
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const group = { channel: 'whatsapp', externalId: '120363000000000001@g.us', name: 'Shop friends', handle: 'group', convMeta: { group: true } };
+  mods.inbox.handleIncoming({ ...group, text: 'Ahmad: who is coming tonight?', messageId: 'g1', autoReply: false });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(sent.length, 0);
+  mods.inbox.handleIncoming({ ...group, text: 'Rami: Jarvis what are your opening hours?', messageId: 'g2', autoReply: true });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(sent.at(-1)?.to, group.externalId);
+  const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === group.externalId);
+  assert.match(mods.agent.buildRulesPrompt(mods.inbox.getConversation(conv.id)), /GROUP CHAT/);
+  assert.doesNotMatch(mods.agent.buildRulesPrompt(null), /GROUP CHAT/);
+});

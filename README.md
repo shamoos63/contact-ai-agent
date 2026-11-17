@@ -103,6 +103,9 @@ For development, run `npm run dev:server` and `npm run dev:client` (dashboard on
 Channels → WhatsApp → tick **Enabled** → scan the QR with the phone (WhatsApp → Settings → Linked devices → Link a device).
 This uses WhatsApp Web (via [Baileys](https://github.com/WhiskeySockets/Baileys)), which is not an official API: use a **separate number**, since WhatsApp may ban numbers that look automated. The session is saved in `data/whatsapp-auth`, so you scan only once. Group chats are ignored.
 
+#### WhatsApp groups
+Add the agent's number to a group and everyone there can talk to it. By default it answers only when someone @mentions it, replies to one of its messages, or calls it by name (the company name, or names you add under **Channels → WhatsApp**, e.g. "Jarvis, جارفس"); it can also answer every message, or stay quiet in groups. Each group is one chat in the inbox, every message shows who wrote it, and the AI answers that person by name. Voice notes and photos in a group are only read when they're meant for the AI. Groups never get sales follow-ups, and owners don't get assistant powers inside a group (use a private chat for that).
+
 ### Telegram
 Message [@BotFather](https://t.me/BotFather), send `/newbot`, copy the token, paste it under Channels → Telegram and click **Save & connect**. Customers message your bot.
 
