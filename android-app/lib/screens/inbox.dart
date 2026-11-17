@@ -67,6 +67,12 @@ class _InboxScreenState extends State<InboxScreen> {
             const GradientText('Inbox', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
             const Spacer(),
             if (items != null) Text('${items.where((c) => c.unread > 0).length} unread', style: const TextStyle(color: AppColors.muted)),
+            if (items != null && items.any((c) => c.unread > 0))
+              IconButton(
+                tooltip: 'Mark all as read',
+                onPressed: _markAllRead,
+                icon: const Icon(Icons.done_all_rounded, color: AppColors.cyan),
+              ),
           ]),
         ),
         Padding(
@@ -97,12 +103,51 @@ class _InboxScreenState extends State<InboxScreen> {
     );
   }
 
+  Future<void> _markAllRead() async {
+    final unread = (_items ?? []).where((c) => c.unread > 0).toList();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await Future.wait(unread.map((c) => Api.instance.setUnread(c.id, 0)));
+      messenger.showSnackBar(SnackBar(content: Text('Marked ${unread.length} chats as read')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+    await _load();
+  }
+
+  Future<void> _chatMenu(Conversation c) async {
+    final unread = c.unread > 0;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.bg2,
+      showDragHandle: true,
+      builder: (s) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(title: Text(c.title, style: const TextStyle(fontWeight: FontWeight.w600)), subtitle: Text(c.handle)),
+          ListTile(
+            leading: Icon(unread ? Icons.mark_chat_read_rounded : Icons.mark_chat_unread_rounded),
+            title: Text(unread ? 'Mark as read' : 'Mark as unread'),
+            onTap: () => Navigator.pop(s, unread ? 'read' : 'unread'),
+          ),
+        ]),
+      ),
+    );
+    if (choice == null) return;
+    try {
+      await Api.instance.setUnread(c.id, choice == 'read' ? 0 : 1);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+    await _load();
+  }
+
   Widget _tile(Conversation c) {
     final (icon, color) = _channelIcons[c.channel] ?? (Icons.chat_bubble_rounded, AppColors.muted);
     final preview = c.lastMessage.replaceAll(RegExp(r'\s*\[Photo:[\s\S]*$'), ' 📷');
     return Glass(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       glow: c.unread > 0 ? AppColors.cyan : null,
+      onLongPress: () => _chatMenu(c),
       onTap: () async {
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ConversationScreen(id: c.id, title: c.title)));
         _load();
@@ -202,6 +247,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
         _conv = c;
         _messages = msgs;
       });
+      // Seen: the chat is open, like opening it in the dashboard.
+      if (c.unread > 0) {
+        try {
+          await Api.instance.setUnread(widget.id, 0);
+        } catch (_) {}
+      }
       if (scroll || grew) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);

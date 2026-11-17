@@ -177,6 +177,10 @@ class Api {
 
   Future<void> reply(int id, String text) => post('/conversations/$id/messages', {'text': text});
   Future<void> aiReply(int id) => post('/conversations/$id/ai-reply');
+  /// Read state, as the dashboard does when a chat is opened (unread = 0).
+  Future<void> setUnread(int id, int unread) => _guard(() async =>
+      _decode(await http.patch(_u('/conversations/$id'), headers: _headers, body: jsonEncode({'unread': unread}))));
+
   Future<void> setAuto(int id, bool on) => _guard(() async =>
       _decode(await http.patch(_u('/conversations/$id'), headers: _headers, body: jsonEncode({'auto_reply': on}))));
 
