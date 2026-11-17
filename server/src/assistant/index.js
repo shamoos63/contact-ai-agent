@@ -348,7 +348,7 @@ function badSentence(sentence, said, language, who, company, recipient = '') {
   if (language !== 'Arabic') return false;
   if (MIXED.test(sentence)) return true;
   if (EGYPTIAN.test(sentence) && !EGYPTIAN.test(said)) return true;
-  const allowed = new Set([...latinWords(said), ...latinWords(recipient)].map((w) => w.toLowerCase()));
+  const allowed = new Set([...latinWords(said), ...latinWords(recipient), ...(intro ? [...latinWords(who), ...latinWords(company)] : [])].map((w) => w.toLowerCase()));
   return latinWords(sentence).some((w) => !allowed.has(w.toLowerCase()));
 }
 const sentencesOf = (text) => String(text).match(/[^.!؟?\n]+[.!؟?]*\s*/g) || [];
@@ -356,6 +356,20 @@ function badDraft(text, said, language, who, company, recipient = '') {
   return sentencesOf(text).some((x) => badSentence(x, said, language, who, company, recipient));
 }
 // Keep only the sentences the owner asked for. "(Translation: …)" and the like go first.
+function withoutTranslation(text, said, language) {
+  let t = String(text || '');
+  if (language === 'Arabic' && !latinWords(said).length) t = t.replace(/\s*\([^)]*[A-Za-z][^)]*\)/g, '');
+  return sentencesOf(t).filter((x) => !/translation|ترجمة/i.test(x)).join('').trim();
+}
+// The draft is just the owner's instruction ("ابعتلو لنورس صباح الخير وعرفو عن حالك", "غيث انو …").
+function copiesCommand(text, said) {
+  const t = String(text || '');
+  if (/(^|\s)(ابعتلو|ابعتلها|ابعت|عرفو|عرفها|قلو|قلها|قله|خبرو|خبرها|احكي مع)(?=\s|$)/.test(t)) return true;
+  if (/^\s*\p{L}+\s+(انو|إنو|انه|إنه|إن|ان)\s/u.test(t)) return true;
+  const a = nameWords(withoutPhoto(said)).join(' ');
+  return a.length > 8 && nameWords(t).join(' ') === a;
+}
+
 export function trimDraft(text, said, language, who, company, recipient = '') {
   let t = String(text || '');
   if (language === 'Arabic' && !latinWords(said).length) t = t.replace(/\s*\([^)]*[A-Za-z][^)]*\)/g, '');
@@ -398,14 +412,22 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
     // A translation, Latin letters in Arabic ("هisham"), Egyptian words, feelings or an introduction nobody
     // asked for: once more, strictly, then drop whatever sentences are still extra.
     const said = cmd.said || '';
-    if (out && badDraft(out, said, language, who, company, recipient)) {
+    // Instruction words (قلو، ابعت لـ، إنو) and numbers the model copied are taken out before judging.
+    if (out) out = cleanDraft(out, target);
+    if (out && (badDraft(out, said, language, who, company, recipient) || copiesCommand(out, said))) {
       const again = (await chat([{ role: 'system', content: `${system}\nOnly what ${who} asked to say, nothing else: no translation, no introduction, no apology, no feelings ${who} didn't mention.${language === 'Arabic' ? ' Arabic letters only, Syrian dialect.' : ''}` }, { role: 'user', content: 'Write it now.' }], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
-      out = [again, out].map((x) => (x && !CJK.test(x) ? trimDraft(x, said, language, who, company, recipient) : '')).find((x) => /\p{L}{2,}/u.test(x)) || '';
+      const tried = [again && cleanDraft(again, target), out].filter((x) => x && !CJK.test(x) && !copiesCommand(x, said));
+      // Whole sentences that don't belong are dropped. If nothing is left, keep the model's draft with only
+      // the translation taken out: never the owner's command itself.
+      out = tried.map((x) => trimDraft(x, said, language, who, company, recipient)).find((x) => /\p{L}{2,}/u.test(x))
+        || tried.map((x) => withoutTranslation(x, said, language)).find((x) => /\p{L}{2,}/u.test(x) && !copiesCommand(x, said)) || '';
     }
     if (relation) out = out.replace(new RegExp(`^\\s*${relation}[،,!:]?\\s*`), '');
-    if (out && !CJK.test(out)) return cleanDraft(out, target);
-    if (!out && cmd.text && draftFits(cmd.text, cmd.said)) return cmd.text;
-    if (!out) return cleanDraft(withoutPhoto(cmd.said || ''), target) || cmd.text;
+    // "أخبرك إني رح اتأخر" reads stiff: just say it.
+    out = out.replace(/(^|[،,.!]\s*)(حبيت\s+)?(أخبرك|اخبرك|بخبرك|أحب أن أخبرك|أود أن أخبرك|أود إخبارك)\s+(ب?إني|ب?اني|إنو|انو|أن|ان|بأن|بأني)\s+/u, '$1');
+    if (out && !CJK.test(out) && !copiesCommand(out, said)) return cleanDraft(out, target);
+    if (cmd.text && draftFits(cmd.text, cmd.said) && !copiesCommand(cmd.text, said)) return cmd.text;
+    return null;
   } catch (err) {
     console.error('[assistant] Writing the message failed:', err.message);
   }

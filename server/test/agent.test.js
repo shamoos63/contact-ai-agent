@@ -1442,6 +1442,11 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   assert.match(await says('انت ما عم تفهم', { action: 'chat', reply: 'أنا مساعد ذكاء اصطناعي' }, 'sm14b'), /آسف 🙏/);
   assert.match(await says('بدي شي بس مش عارف شو', { action: 'chat', reply: null }, 'sm14c'), /ما فهمت عليك/);
 
+  // The owner's command is never sent as the message itself.
+  const copy = await says('ابعتلو لنورس صباح الخير وعرفو عن حالك +971 50 444 5566', { action: 'send_message', to: '+971 50 444 5566', text: 'ابعتلو لنورس صباح الخير وعرفو عن حالك' }, 'sm14d');
+  assert.doesNotMatch(copy, /ابعتلو لنورس/);
+  await says('no', null, 'sm14e');
+
   // Drafts lose what the owner never said: a translation, Latin letters, feelings, an introduction.
   const said = 'ابعت لسامر انو وصلت';
   assert.equal(assistant.trimDraft('سامر، وصلت. اشتقتلك! (Translation: Samer, I arrived.)', said, 'Arabic', 'Hisham', 'TopTech'), 'سامر، وصلت.');
