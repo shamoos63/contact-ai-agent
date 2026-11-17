@@ -1450,7 +1450,9 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   // Short plain requests use a template: the point is kept, nothing is added.
   assert.equal(assistant.templateDraft('قلو لغيث انو اليوم رح اتأخر', 'غيث', null, 'Hisham', 'TopTech', 'Arabic', false), 'مرحبا غيث، اليوم رح اتأخر');
   assert.equal(assistant.templateDraft('ابعتلو لنورس صباح الخير وعرفو عن حالك', 'نورس', null, 'Hisham', 'TopTech', 'Arabic', true), 'صباح الخير نورس، معك المساعد الذكي تبع Hisham من TopTech 👋');
-  assert.equal(assistant.templateDraft('ابعت لمرتي انو اشتقتلها', '', 'مرتي', 'Hisham', 'TopTech', 'Arabic', false), null);
+  assert.equal(assistant.templateDraft('ابعت لمرتي انو اشتقتلها', '', 'مرتي', 'هشام', 'توب تك', 'Arabic', false), 'اشتقتلك');
+  assert.equal(assistant.templateDraft('قلو لغيث اسألو اذا الطلب جاهز', 'غيث', null, 'هشام', 'توب تك', 'Arabic', false), 'مرحبا غيث، الطلب جاهز؟');
+  assert.equal(assistant.normalizeAssistant({ owners: [{ name: 'Hisham', name_ar: 'هشام', phone: '+971501' }], company_ar: 'توب تك' }).company_ar, 'توب تك');
   // A name given with a new number is remembered.
   assert.ok(assistant.listOwnerContacts(key).some((c) => c.name === 'نورس'));
 
