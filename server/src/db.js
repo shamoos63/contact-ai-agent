@@ -205,3 +205,8 @@ CREATE TABLE IF NOT EXISTS email_accounts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `);
+
+// Columns added after the first release.
+const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+if (!columns('kb_sources').includes('audience')) db.exec("ALTER TABLE kb_sources ADD COLUMN audience TEXT NOT NULL DEFAULT 'all'");
+

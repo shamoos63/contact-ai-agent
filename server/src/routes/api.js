@@ -5,7 +5,7 @@ import { db } from '../db.js';
 import { login, changePassword, requireAuth, setSessionCookie, clearSessionCookie } from '../auth.js';
 import { getAllSettings, setSetting, getSetting, SETTING_KEYS } from '../settings.js';
 import { listConversations, listMessages, sendMessage, updateConversation, getConversation, replyNow, updateMeta } from '../inbox.js';
-import { createSource, indexSource, reindexAll, search, invalidateCache } from '../kb/index.js';
+import { createSource, indexSource, reindexAll, search, invalidateCache, setSourceAudience } from '../kb/index.js';
 import { extractFile, extractUrl } from '../kb/extract.js';
 import { answer } from '../ai/agent.js';
 import * as ollama from '../ai/ollama.js';
@@ -101,7 +101,7 @@ api.get('/stats', (req, res) => {
 
 // --- Knowledge base ---
 api.get('/kb', (req, res) => {
-  res.json(db.prepare('SELECT id, type, title, origin, status, error, chunk_count, created_at, length(content) AS size FROM kb_sources ORDER BY id DESC').all());
+  res.json(db.prepare('SELECT id, type, title, origin, status, error, chunk_count, audience, created_at, length(content) AS size FROM kb_sources ORDER BY id DESC').all());
 });
 api.get('/kb/:id', (req, res) => {
   const s = db.prepare('SELECT * FROM kb_sources WHERE id = ?').get(Number(req.params.id));
@@ -119,6 +119,11 @@ api.put('/kb/:id', (req, res) => {
   const { title, content } = req.body || {};
   db.prepare('UPDATE kb_sources SET title = COALESCE(?, title), content = COALESCE(?, content) WHERE id = ?').run(title ?? null, content ?? null, Number(req.params.id));
   indexSource(Number(req.params.id));
+  res.json({ ok: true });
+});
+// "Owner only": the assistant can use it, customers never get answers from it.
+api.put('/kb/:id/audience', (req, res) => {
+  setSourceAudience(Number(req.params.id), req.body?.audience);
   res.json({ ok: true });
 });
 api.post('/kb/url', wrap(async (req, res) => {

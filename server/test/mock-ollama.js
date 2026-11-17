@@ -14,6 +14,7 @@ function vec(text) {
 
 // Answers the tests queue up for the owner assistant, one per request.
 export const assistantAnswers = [];
+export const lastAssistantTurns = { value: 0 };
 export const lastWebPrompt = { value: '' };
 // What the photo model "sees", one per photo; and the last photo request.
 export const visionAnswers = [];
@@ -78,6 +79,11 @@ export function startMockOllama() {
         const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
       }
+      if (system.includes('You edit a short message before it is sent')) {
+        const change = system.match(/The change asked: «([^»]*)»/)[1];
+        const before = system.match(/The message: «([^»]*)»/)[1];
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: /بالعربي/.test(change) ? 'مرحبا، طلبك جاهز.' : `${before} (${change})` } }));
+      }
       if (system.includes('These are customer messages to')) {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: 'Here you go:\n- iPhone prices (about 2 messages)\n- Delivery (about 1 message)' } }));
       }
@@ -101,6 +107,7 @@ export function startMockOllama() {
         return res.end(JSON.stringify({ message: { role: 'assistant', content: `About the photo: ${desc}` } }));
       }
       if (system.includes('You are the personal assistant of')) {
+        lastAssistantTurns.value = data.messages.filter((m) => m.role !== 'system').length;
         if (!data.format) return res.end(JSON.stringify({ message: { role: 'assistant', content: 'no schema' } }));
         return res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(assistantAnswers.shift() || { action: 'help' }) } }));
       }

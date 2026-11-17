@@ -13,7 +13,7 @@ function loadCache() {
   if (cache) return cache;
   cache = db
     .prepare(
-      `SELECT c.id, c.text, c.embedding, s.title, s.id AS source_id FROM kb_chunks c
+      `SELECT c.id, c.text, c.embedding, s.title, s.id AS source_id, s.audience FROM kb_chunks c
        JOIN kb_sources s ON s.id = c.source_id WHERE s.status = 'ready' AND c.embedding IS NOT NULL`,
     )
     .all()
@@ -69,8 +69,9 @@ export async function indexSource(id) {
   emit('kb', { id });
 }
 
-export async function search(query, { k = 5, minScore = 0.35 } = {}) {
-  const items = loadCache();
+// audience 'customers': leaves out sources marked "owner only" (e.g. the owner's own CV or notes).
+export async function search(query, { k = 5, minScore = 0.35, audience = 'all' } = {}) {
+  const items = loadCache().filter((i) => audience !== 'customers' || i.audience !== 'owner');
   if (!items.length) return [];
   const [qv] = await embed([query]);
   const q = normalize(qv);
@@ -85,4 +86,10 @@ export async function search(query, { k = 5, minScore = 0.35 } = {}) {
 export async function reindexAll() {
   const ids = db.prepare('SELECT id FROM kb_sources').all().map((r) => r.id);
   for (const id of ids) await indexSource(id);
+}
+
+export function setSourceAudience(id, audience) {
+  db.prepare('UPDATE kb_sources SET audience = ? WHERE id = ?').run(audience === 'owner' ? 'owner' : 'all', id);
+  invalidateCache();
+  emit('kb', { id });
 }

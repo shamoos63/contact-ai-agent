@@ -214,7 +214,7 @@ async function autoReply(conversationId, { force = false } = {}) {
     if (!tag) await sendProductPhotos(conversationId, reply, sources.map((s) => s.source_id)).catch((err) => console.warn('[catalog] Photo not sent:', err.message));
     afterReply(conversationId, tag).catch((err) => addNote(conversationId, `Team handoff failed: ${err.message}`));
     // The AI didn't know: ask the owner, who can answer by chat (sent to the customer and remembered).
-    if (unsure && !tag) askOwnerAbout(conversationId).catch((err) => console.error('[assistant] Asking the owner failed:', err.message));
+    if (unsure && !tag && !conversationRow(conversationId)?.meta?.group) askOwnerAbout(conversationId).catch((err) => console.error('[assistant] Asking the owner failed:', err.message));
   } finally {
     stopPresence();
     emit('typing', { conversationId, typing: false });

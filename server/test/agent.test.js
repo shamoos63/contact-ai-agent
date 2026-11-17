@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startMockOllama, assistantAnswers, lastWebPrompt } from './mock-ollama.js';
+import { startMockOllama, assistantAnswers, lastWebPrompt, lastAssistantTurns } from './mock-ollama.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cai-test-'));
 process.env.DATA_DIR = dataDir;
@@ -1351,4 +1351,78 @@ test('groups: the AI answers in a group only when addressed, knows who spoke, an
   const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === group.externalId);
   assert.match(mods.agent.buildRulesPrompt(mods.inbox.getConversation(conv.id)), /GROUP CHAT/);
   assert.doesNotMatch(mods.agent.buildRulesPrompt(null), /GROUP CHAT/);
+});
+
+test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no made-up numbers, inbox, country, formatting', async () => {
+  const assistant = await import('../src/assistant/index.js');
+  mods.settings.setSetting('assistant', assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Dubai', confirm_before_sending: true, owners: [{ name: 'Hisham', phone: '+971 50 818 1818' }] }));
+  mods.settings.setSetting('drafts', { enabled: false, approvals: 3, hold_message: true });
+  const sent = [];
+  mods.inbox.registerSender('whatsapp', async (conv, text) => sent.push({ to: conv.external_id, text }));
+  const owner = { channel: 'whatsapp', externalId: '971508181818@s.whatsapp.net', name: 'Hisham', handle: '+971508181818', convMeta: { phone: '+971508181818' }, autoReply: false };
+  const wait = () => new Promise((r) => setTimeout(r, 300));
+  const toOwner = () => sent.filter((m) => m.to === owner.externalId).map((m) => m.text);
+  const others = () => sent.filter((m) => m.to !== owner.externalId);
+  const says = async (text, answer, id) => {
+    if (answer) assistantAnswers.push(answer);
+    mods.inbox.handleIncoming({ ...owner, text, messageId: id });
+    await wait();
+    return toOwner().at(-1);
+  };
+  const key = assistant.ownerKey({ phone: '+971508181818' });
+  assistant.saveOwnerContact(key, { name: 'مرتي', phone: '+971501110000' });
+
+  // 1. "Who should I send it to?" is asked once; an answer that isn't a name is a new request, read on its own.
+  const first = await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm1');
+  assert.match(first, /لمين بدك ابعتها/);
+  assert.equal(await says('الي هون', { action: 'chat', reply: 'تمام' }, 'sm2'), 'تمام');
+  assert.equal(lastAssistantTurns.value, 1);
+  // A name and a number answer it: the number is used and saved under that name.
+  await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm3');
+  const preview = await says('غيث +971 50 222 3344', null, 'sm4');
+  assert.match(preview, /📇 حفظت غيث \(\+971502223344\)/);
+  assert.match(preview, /واتساب إلى \+971502223344/);
+  assert.ok(assistant.listOwnerContacts(key).some((c) => c.name === 'غيث'));
+  await says('no', null, 'sm5');
+
+  // 2. "لمرتي" finds the saved "مرتي", and the message never calls her "مرتي".
+  const toWife = await says('ابعت لمرتي انو اشتقتلها', { action: 'send_message', to: 'لمرتي', text: 'مرتي، اشتقتلك' }, 'sm6');
+  assert.match(toWife, /واتساب إلى مرتي \(\+971501110000\)/);
+  assert.match(toWife, /\n\nاشتقتلك\n\n/);
+
+  // 3. "اي بس بالعربي" changes the draft and asks again; only a plain yes sends.
+  const edited = await says('اي بس بالعربي', null, 'sm7');
+  assert.match(edited, /\n\nمرحبا، طلبك جاهز\.\n\n/);
+  assert.equal(others().length, 0);
+  await says('اي', null, 'sm8');
+  assert.deepEqual(others().at(-1), { to: '971501110000@s.whatsapp.net', text: 'مرحبا، طلبك جاهز.' });
+
+  // 4. A number the owner never wrote is not used; a price question is a search, not "learn".
+  assert.equal(assistant.fixCommand({ action: 'send_message', to: '+971XXXXXXNour' }, 'قلها لنور صباح الخير', 'Arabic').to, 'Nour');
+  assert.equal(assistant.fixCommand({ action: 'learn', text: 'ipad air' }, 'اديش حق ipad air', 'Arabic').action, 'web_search');
+  assert.equal(assistant.fixCommand({ action: 'learn', text: 'x' }, 'تعلم عن المنافس', 'Arabic').action, 'learn');
+  assert.equal(assistant.fixCommand({ action: 'chat', reply: 'x' }, 'Has anyone sent me any messages?', 'English').action, 'inbox');
+  assert.equal(assistant.fixCommand({ action: 'send_message', to: null }, 'حدا بعتلي شي؟ مين حكى اليوم', 'Arabic').action, 'inbox');
+
+  // 5. The inbox: who wrote in the last day.
+  mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971509990000@s.whatsapp.net', name: 'Layla', handle: '+971509990000', text: 'Is the iPad Air in stock?', messageId: 'sm9', autoReply: false });
+  const inbox = await says('any new messages?', { action: 'chat', reply: 'no' }, 'sm10');
+  assert.match(inbox, /📥 \d+ chats? with new messages[\s\S]*Layla \(whatsapp, \d\d:\d\d[^)]*\): «Is the iPad Air in stock\?»/);
+
+  // 6. Prices are searched where the business is (from the owner's +971 number).
+  assert.equal(assistant.businessCountry(), 'United Arab Emirates');
+
+  // 7. Markdown becomes WhatsApp formatting.
+  const { forChat } = await import('../src/channels/format.js');
+  assert.equal(forChat('### Prices\n**iPad Air** 2,199 AED\n* 256GB\n[Apple](https://apple.com)'), '*Prices*\n*iPad Air* 2,199 AED\n• 256GB\nApple: https://apple.com');
+  assert.equal(forChat('**bold**', 'telegram'), 'bold');
+
+  // 8. "Owner only" knowledge never reaches customers.
+  const cv = mods.kb.createSource({ type: 'text', title: 'Hisham CV', content: 'Hisham Khatib is a full-stack developer building mobile apps and websites.' });
+  await mods.kb.indexSource(cv);
+  assert.ok((await mods.kb.search('full-stack developer mobile apps', { minScore: 0.1 })).some((r) => r.source_id === Number(cv)));
+  mods.kb.setSourceAudience(cv, 'owner');
+  assert.ok(!(await mods.kb.search('full-stack developer mobile apps', { minScore: 0.1, audience: 'customers' })).some((r) => r.source_id === Number(cv)));
+  assert.match(mods.agent.buildRulesPrompt(null), /IDENTITY: you are the AI assistant of/);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
