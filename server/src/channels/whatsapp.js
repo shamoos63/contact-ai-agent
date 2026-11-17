@@ -62,7 +62,16 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function groupSettings() {
   const w = getSetting('whatsapp');
-  return { mode: w.groups || 'mention', names: String(w.group_names || '') };
+  return { mode: w.groups || 'mention', names: String(w.group_names || ''), allowed: Array.isArray(w.allowed_groups) ? w.allowed_groups : [] };
+}
+
+// The groups this number is in, and which ones the AI may talk in.
+export async function listGroups() {
+  if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
+  const all = await sock.groupFetchAllParticipating();
+  const { allowed } = groupSettings();
+  return Object.values(all).map((g) => ({ id: g.id, subject: g.subject, size: g.participants?.length || 0, allowed: allowed.includes(g.id) }))
+    .sort((a, b) => a.subject.localeCompare(b.subject));
 }
 
 // Is this group message for the AI? me: our own ids (phone and LID digits).
@@ -166,8 +175,9 @@ export async function startWhatsApp(onChange) {
 
 async function handleGroupMessage(socket, m) {
   const g = groupSettings();
-  if (g.mode === 'off') return;
   const jid = m.key.remoteJid;
+  // Only groups the owner allowed: anyone can add the number to a group, that alone isn't enough.
+  if (g.mode === 'off' || !g.allowed.includes(jid)) return;
   const inner = m.message?.ephemeralMessage?.message || m.message?.viewOnceMessage?.message || m.message;
   if (!inner) return;
   const ctx = Object.values(inner).find((v) => v && typeof v === 'object' && v.contextInfo)?.contextInfo || {};
