@@ -566,7 +566,7 @@ test('assistant: messages are written from the owner\'s instructions, quotes are
     return sent.at(-1);
   };
   let reply = await say('احكي مع +963955123456 قلو كيفك وعرفو عن حالك', { action: 'send_message', to: '+963955123456', text: 'كيفك؟' }, 'w1');
-  assert.match(reply, /أهلا، أنا المساعد\. كيفك؟/);
+  assert.match(reply, /\n\nمرحبا، معك المساعد الذكي تبع Hisham 👋 كيفك؟\n\n/);
   await say('لا', null, 'w2');
   reply = await say('send +963955123456 "see you at 5"', { action: 'send_message', to: '+963955123456', text: 'See you at five!' }, 'w3');
   assert.match(reply, /\n\nsee you at 5\n\n/);
@@ -1446,6 +1446,13 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   const copy = await says('ابعتلو لنورس صباح الخير وعرفو عن حالك +971 50 444 5566', { action: 'send_message', to: '+971 50 444 5566', text: 'ابعتلو لنورس صباح الخير وعرفو عن حالك' }, 'sm14d');
   assert.doesNotMatch(copy, /ابعتلو لنورس/);
   await says('no', null, 'sm14e');
+
+  // Short plain requests use a template: the point is kept, nothing is added.
+  assert.equal(assistant.templateDraft('قلو لغيث انو اليوم رح اتأخر', 'غيث', null, 'Hisham', 'TopTech', 'Arabic', false), 'مرحبا غيث، اليوم رح اتأخر');
+  assert.equal(assistant.templateDraft('ابعتلو لنورس صباح الخير وعرفو عن حالك', 'نورس', null, 'Hisham', 'TopTech', 'Arabic', true), 'صباح الخير نورس، معك المساعد الذكي تبع Hisham من TopTech 👋');
+  assert.equal(assistant.templateDraft('ابعت لمرتي انو اشتقتلها', '', 'مرتي', 'Hisham', 'TopTech', 'Arabic', false), null);
+  // A name given with a new number is remembered.
+  assert.ok(assistant.listOwnerContacts(key).some((c) => c.name === 'نورس'));
 
   // Drafts lose what the owner never said: a translation, Latin letters, feelings, an introduction.
   const said = 'ابعت لسامر انو وصلت';

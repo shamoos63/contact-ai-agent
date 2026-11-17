@@ -376,6 +376,57 @@ export function trimDraft(text, said, language, who, company, recipient = '') {
   return sentencesOf(t).filter((x) => !badSentence(x, said, language, who, company, recipient)).join('').trim();
 }
 
+// What the owner wants said: the words after "انو" / "that", or what's left once the instruction words,
+// the name and the number are taken out.
+const VERB_TOKEN = /^(ابعتلو|ابعتلها|ابعتله|ابعتلي|ابعت|ابعث|بعات|قلو|قلها|قله|قول|قوللو|خبرو|خبرها|خبر|بلغو|بلغ|احكي|احكيلو|احكيلها|مع|راسل|رسالة|مسج|واتس|send|tell|message|text|him|her|them|a|to)$/i;
+const POINT_START = /(?:^|\s)(?:انو|إنو|انه|إنه|إن|ان|إني|اني|that)\s+/;
+function pointOf(said, name, relation) {
+  let t = String(said).replace(/\+?\d[\d\s-]{6,}\d/g, ' ').replace(/(و?عرف(و|ها|هم)?|و?قدم(و|ها)?)\s+عن\s+(حالك|نفسك)|and introduce yourself|introduce yourself/gi, ' ');
+  const m = t.match(POINT_START);
+  if (m) return t.slice(m.index + m[0].length).trim();
+  const skip = new Set([name, relation].filter(Boolean).flatMap((w) => variants(w)).map((w) => w.toLowerCase()));
+  const words = t.split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < words.length && (VERB_TOKEN.test(words[i]) || /^(ل|لـ)$/.test(words[i]) || variants(words[i]).some((v) => skip.has(v.toLowerCase())) || variants(words[i]).some((v) => RELATION.test(v)))) i++;
+  return words.slice(i).join(' ').trim();
+}
+// Words that point at the recipient ("مشتقلها", "tell him he…") need rewording: that's the model's job.
+const NEEDS_REWORDING = /(\p{L}(لو|لها|له|لهم|و|ها|ه)(?=[\s،,.!؟?]|$))|(^|\s)(he|she|him|her|his|they|them|their|هو|هي|هوي|هيي)(?=\s|$)|[؟?]|(^|\s)(اسأل|اسال|اسألو|اسألها|ask)/iu;
+const GREETING = /^(صباح الخير|صباح النور|مسا الخير|مساء الخير|مرحبا|مرحبتين|هلا|اهلين|أهلين|السلام عليكم|good morning|good evening|hi|hello)[،,!.\s]*/i;
+export function templateDraft(said, name, relation, who, company, language, intro) {
+  if (!/(^|\s)(ابعتلو|ابعتلها|ابعتله|ابعت|ابعث|قلو|قلها|قله|قول|خبرو|خبرها|احكي|send|tell)(?=\s|$|ل)/i.test(said)) return null;
+  const point = pointOf(said, name, relation).replace(/[.!]+$/, '').trim();
+  const words = point.split(/\s+/).filter(Boolean);
+  const ar = language === 'Arabic';
+  if (ar !== /[؀-ۿ]/.test(point) && point) return null;
+  if (words.length > 8 || (!words.length && !intro)) return null;
+  // "إني"/"that I" stays: "إني وصلت" -> "وصلت".
+  let body = point.replace(/^(إني|اني|إنو|انو)\s+/, '');
+  const pointWords = body.split(/\s+/).filter(Boolean);
+  if (pointWords.some((w) => NEEDS_REWORDING.test(w) && !/^(اليوم|شوي|بكرا|هلق|كمان|منيح|تمام|يعني)$/.test(w))) return null;
+  const greet = body.match(GREETING)?.[0]?.replace(/[،,!.\s]+$/, '') || '';
+  body = body.slice(greet ? body.match(GREETING)[0].length : 0).trim();
+  const hello = greet || (ar ? 'مرحبا' : 'Hi');
+  const head = relation ? (greet ? `${greet}` : '') : `${hello}${name ? ` ${name}` : ''}`;
+  const named = who && who !== 'the owner' ? who : '';
+  const by = company && company !== 'Our Company' ? company : '';
+  const introLine = intro ? (ar ? `معك المساعد الذكي${named ? ` تبع ${named}` : ''}${by ? ` من ${by}` : ''} 👋` : `This is ${named ? `${named}'s` : 'the'} AI assistant${by ? ` at ${by}` : ''} 👋`) : '';
+  if (/^(كيفك|كيفكن|شلونك|شو أخبارك|شو اخبارك|كيف الحال|how are you)$/i.test(body)) body += ar ? '؟' : '?';
+  const top = [head, introLine].filter(Boolean).join(ar ? '، ' : ', ');
+  const out = introLine ? [top, body].filter(Boolean).join(' ') : [top, body].filter(Boolean).join(ar ? '، ' : ', ');
+  return out || null;
+}
+// The draft keeps the point of the request ("اتأخر", "وصلت"): at least half of its main words.
+function keepsPoint(text, said, intro) {
+  const point = pointOf(withoutPhoto(said), '', null);
+  const main = nameWords(point).filter((w) => !NEEDS_REWORDING.test(w) && skeleton(w).length >= 2);
+  if (intro && !/(مساعد|assistant)/i.test(text)) return false;
+  if (!main.length) return true;
+  const have = nameWords(text).map(skeleton);
+  const hits = main.filter((w) => variants(w).some((v) => have.some((h) => h.includes(skeleton(v)) || (h.length >= 2 && skeleton(v).includes(h))))).length;
+  return hits / main.length >= 0.5;
+}
+
 // Turn the owner's instruction ("tell him how are you and introduce yourself") into the message the
 // recipient actually reads, written by the assistant on the owner's behalf.
 async function composeMessage(cmd, target, owner, language, isEmail) {
@@ -385,6 +436,15 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
   // "مرتي", "أمي", "my wife": how the owner calls them, not their name. Never greet them with it.
   const relation = variants(recipient).find((v) => RELATION.test(v)) || null;
   if (relation) recipient = '';
+  const said = withoutPhoto(cmd.said || '');
+  const intro = /(عرف|عرّف|قدم|introduce)/i.test(said);
+  const name = recipient && !/^\+?\d/.test(recipient) ? recipient : '';
+  // Short, plain requests ("قلو لغيث انو اليوم رح اتأخر") don't need the model: it adds things and
+  // changes the dialect, and a template is instant.
+  if (!isEmail) {
+    const quick = templateDraft(said, name, relation, who, company, language, intro);
+    if (quick) return cleanDraft(quick, target);
+  }
   const system = [
     `You write ${isEmail ? 'emails' : 'WhatsApp messages'} on behalf of ${who} at ${company}. You are ${who}'s AI assistant.`,
     `${who} asked you: «${cmd.said}»`,
@@ -411,12 +471,12 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
     }
     // A translation, Latin letters in Arabic ("هisham"), Egyptian words, feelings or an introduction nobody
     // asked for: once more, strictly, then drop whatever sentences are still extra.
-    const said = cmd.said || '';
     // Instruction words (قلو، ابعت لـ، إنو) and numbers the model copied are taken out before judging.
     if (out) out = cleanDraft(out, target);
-    if (out && (badDraft(out, said, language, who, company, recipient) || copiesCommand(out, said))) {
+    if (out && (badDraft(out, said, language, who, company, recipient) || copiesCommand(out, said) || !keepsPoint(out, said, intro))) {
       const again = (await chat([{ role: 'system', content: `${system}\nOnly what ${who} asked to say, nothing else: no translation, no introduction, no apology, no feelings ${who} didn't mention.${language === 'Arabic' ? ' Arabic letters only, Syrian dialect.' : ''}` }, { role: 'user', content: 'Write it now.' }], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
-      const tried = [again && cleanDraft(again, target), out].filter((x) => x && !CJK.test(x) && !copiesCommand(x, said));
+      const tried = [again && cleanDraft(again, target), out].filter((x) => x && !CJK.test(x) && !copiesCommand(x, said))
+        .sort((a, b) => keepsPoint(b, said, intro) - keepsPoint(a, said, intro));
       // Whole sentences that don't belong are dropped. If nothing is left, keep the model's draft with only
       // the translation taken out: never the owner's command itself.
       out = tried.map((x) => trimDraft(x, said, language, who, company, recipient)).find((x) => /\p{L}{2,}/u.test(x))
@@ -565,7 +625,7 @@ function callAs(word, name) {
 }
 
 // "ابعت لغيث إنو…": the name the owner used, when we don't know them yet.
-const SEND_VERB = /(?:^|\s)(?:(?:ابعت|ابعث|بعات|راسل|احكي\s+مع|send(?:\s+a\s+message)?|message|text|tell)\s+(?:to\s+|لـ\s*|ل\s+)?|(?:قول|قلي|خبر|احكي|رسالة|مسج)\s+(?:لـ\s*|ل(?=\p{L}{2,})))(\p{L}{2,})/u;
+const SEND_VERB = /(?:^|\s)(?:(?:ابعتلو|ابعتلها|ابعتله|ابعت|ابعث|بعات|راسل|احكي\s+مع|send(?:\s+a\s+message)?|message|text|tell)\s+(?:to\s+|لـ\s*|ل\s+)?|(?:قول|قلي|خبر|احكي|رسالة|مسج)\s+(?:لـ\s*|ل(?=\p{L}{2,})))(\p{L}{2,})/u;
 const NOT_NAMES = /^(مرحبا|مرحبتين|هلا|اهلا|أهلا|السلام|صباح|مسا|مساء|كيفك|شكرا|رسالة|مسج|مسدج|واتس|واتساب|إنو|انو|إنه|انه|أنه|هلق|بكرا|اليوم|إلي|الي|لي|إله|اله|الها|إلها|كل|الكل|هاد|هاي|a|the|him|her|them|me|that|message|whatsapp|now|today|tomorrow|hi|hello|hey|thanks|good)$/i;
 function nameFromSaid(said) {
   const m = withoutPhoto(said).match(SEND_VERB);
@@ -941,6 +1001,15 @@ async function act(cmd, conv, owner, language) {
         return asking(say(language,
           `Which ${who}?\n${chooseList(target.choose, language)}\nReply with the number (1, 2…) or "no" to cancel.`,
           `أي ${who}؟\n${chooseList(target.choose, language)}\nرد بالرقم (1، 2…) أو "لا" للإلغاء.`));
+      }
+      // "ابعتلو لنورس … +971…": a new number with a name. Greet them by it, and save it for next time.
+      if (!isEmail && !target.saved && target.phone && !cmd.target) {
+        const name = nameFromSaid(cmd.said || '');
+        if (name) {
+          target.callAs = name;
+          target.label = `${name} (${target.phone})`;
+          try { saveOwnerContact(ownerKey(owner), { name, phone: target.phone }); } catch { /* still sent */ }
+        }
       }
       // Words in quotes ("…", «…») are sent as written; anything else is an instruction the assistant carries out.
       const quoted = String(cmd.said || '').match(/["“«]([^"”»]{2,})["”»]/)?.[1]?.trim();
