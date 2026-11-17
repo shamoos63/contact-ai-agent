@@ -1316,15 +1316,15 @@ async function processOwnerMessage(conversationId, messageId = null) {
   const owner = ownerOf(conv);
   if (!owner) return;
   const row = messageId
-    ? db.prepare("SELECT text, meta FROM messages WHERE id = ? AND conversation_id = ?").get(messageId, conversationId)
-    : db.prepare("SELECT text, meta FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId);
-  const text = row?.text || '';
+    ? db.prepare("SELECT id, text, meta FROM messages WHERE id = ? AND conversation_id = ?").get(messageId, conversationId)
+    : db.prepare("SELECT id, text, meta FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId);
+  let text = row?.text || '';
   const msgMeta = JSON.parse(row?.meta || '{}');
   conv.meta.currentMessageId = messageId;
   // A photo's description is in English; the owner's own words (caption) decide the language.
-  const own = withoutPhoto(text);
+  let own = withoutPhoto(text);
   // "1" or "👍" has no language of its own: answer in the language of the owner's last real message.
-  const hasWords = /\p{L}{2,}/u.test(own) && !msgMeta.imageError;
+  const hasWords = /\p{L}{2,}/u.test(own) && (!msgMeta.imageError || !!msgMeta.caption);
   const language = hasWords ? detectLanguage([{ role: 'user', content: own }]) : conv.meta.assistantLanguage || 'English';
   // A bare "ok" / "اي" doesn't change the language; "ابعت لسامر…" does.
   const bare = own.trim().split(/\s+/).length <= 2 && (YES.has(firstWord(text)) || NO.has(firstWord(text)));
@@ -1334,15 +1334,30 @@ async function processOwnerMessage(conversationId, messageId = null) {
   emit('typing', { conversationId, typing: true });
   const stopPresence = showPresence(conversationId, wantsVoice(conversationId, 'owner') ? 'recording' : 'typing');
   try {
-    if (msgMeta.image && msgMeta.imageError && !msgMeta.caption) {
+    // A photo that couldn't be read: never act on the caption alone, the model would guess what's in it.
+    // The request is kept, so the same photo sent again (without a caption) finishes it.
+    if (msgMeta.image && msgMeta.imageError) {
+      if (msgMeta.caption) updateMeta(conversationId, { assistantPhotoTask: { caption: msgMeta.caption, at: Date.now() } });
+      const again = msgMeta.caption ? say(language, ' Send it again when that\'s done (no need to repeat the text), or type what it says.', ' ابعتلي ياها كمان مرة بعد ما يخلص (ما في داعي تعيد الكلام)، أو اكتبلي شو فيها.') : '';
       return await reply(msgMeta.imageError === 'off'
         ? say(language, "I can't read photos: it's turned off under AI engine → Photos in the dashboard.", 'ما بقدر اقرأ الصور: الميزة مطفية من AI engine ← Photos بالداشبورد.')
-        : say(language, `I couldn't read that photo (${msgMeta.imageError}).`, `ما قدرت اقرأ الصورة (${msgMeta.imageError}).`));
+        : /not downloaded/i.test(msgMeta.imageError)
+          ? say(language, `I couldn't read the photo: the photo model is still downloading.${again}`, `ما قدرت اقرأ الصورة: موديل الصور لسا عم ينزّل.${again}`)
+          : say(language, `I couldn't read that photo (${msgMeta.imageError}).${again}`, `ما قدرت اقرأ الصورة (${msgMeta.imageError}).${again}`));
     }
     if (msgMeta.described) {
       const photo = { text: text.match(PHOTO_BLOCK)?.[0]?.trim() || '', at: Date.now() };
       updateMeta(conversationId, { assistantPhoto: photo });
       conv.meta.assistantPhoto = photo;
+      // The photo that couldn't be read before, sent again: finish the request that came with it.
+      const task = conv.meta.assistantPhotoTask;
+      if (!own && task && Date.now() - task.at < 6 * 3600e3) {
+        own = task.caption;
+        text = `${task.caption}\n${photo.text}`;
+        // The model reads the chat from the database: the photo message carries the request too.
+        db.prepare('UPDATE messages SET text = ? WHERE id = ?').run(text, row.id);
+        updateMeta(conversationId, { assistantPhotoTask: null });
+      }
       // Just a photo, no words: say what it shows and offer what can be done with it.
       if (!own) {
         if (conv.meta.assistantPending || conv.meta.assistantChoice) updateMeta(conversationId, { assistantPending: null, assistantChoice: null, assistantAsked: null });

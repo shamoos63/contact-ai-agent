@@ -859,6 +859,21 @@ test('photos: the assistant reads a business card, saves the number from it, and
   await wait();
   assert.match(sent.at(-1), /انضافت للمعرفة/);
   assert.ok(mods.db.prepare("SELECT 1 FROM kb_sources WHERE title = '📷 A price list'").get());
+
+  // A photo that can't be read: no guessing from the caption. Sent again, it finishes the request.
+  visionAnswers.push('MISSING');
+  const before = assistantAnswers.length;
+  await handleImage({ ...owner, buffer: png, caption: 'احفظ الدومينات يلي بالصورة', messageId: 'card5' });
+  await wait();
+  assert.match(sent.at(-1), /ما قدرت اقرأ الصورة: موديل الصور لسا عم ينزّل\. ابعتلي ياها كمان مرة/);
+  assert.equal(assistantAnswers.length, before);
+  visionAnswers.push('A table. Text: example.com 2027-01-10');
+  assistantAnswers.push({ action: 'learn', text: 'domains' });
+  await handleImage({ ...owner, buffer: png, messageId: 'card6' });
+  await wait();
+  assert.match(sent.at(-1), /هاد اللي رح ضيفه:\n\nA table\. Text: example\.com 2027-01-10/);
+  mods.inbox.handleIncoming({ ...owner, text: 'لا', messageId: 'card7' });
+  await wait();
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
 
