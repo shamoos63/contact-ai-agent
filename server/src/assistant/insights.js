@@ -36,6 +36,7 @@ export function quietLeads({ hours = 24, now = new Date(), skip = new Set(), inc
   for (const c of convs) {
     if (skip.has(c.id)) continue;
     const meta = JSON.parse(c.meta || '{}');
+    if (meta.group) continue; // no sales follow-ups in groups
     const last = db.prepare("SELECT * FROM messages WHERE conversation_id = ? AND direction IN ('in', 'out') ORDER BY id DESC LIMIT 1").get(c.id);
     if (!last || last.direction !== 'out' || last.error) continue;
     const ins = db.prepare("SELECT id, text, created_at FROM messages WHERE conversation_id = ? AND direction = 'in' AND created_at >= ? ORDER BY id DESC LIMIT 5").all(c.id, sqlTime(oldest));

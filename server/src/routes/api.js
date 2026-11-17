@@ -22,7 +22,7 @@ import { normalizeAssistant, listTasks, cancelTask, ownerKey, listOwnerContacts,
 import { MEDIA_DIR } from '../voice.js';
 import { device } from './device.js';
 import path from 'node:path';
-import { logoutWhatsApp } from '../channels/whatsapp.js';
+import { logoutWhatsApp, listGroups } from '../channels/whatsapp.js';
 import { listAccounts, testAccount, PRESETS } from '../channels/email.js';
 import { listRules, validateRule, matchRules } from '../channels/email-rules.js';
 
@@ -394,6 +394,13 @@ api.delete('/ai/models/:model', wrap(async (req, res) => {
 
 // --- Channels ---
 api.get('/channels', (req, res) => res.json(channelStatus()));
+api.get('/channels/whatsapp/groups', wrap(async (req, res) => {
+  try {
+    res.json(await listGroups());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}));
 api.post('/channels/whatsapp/restart', (req, res) => {
   restart.whatsapp();
   res.json({ ok: true });

@@ -56,7 +56,7 @@ function WhatsApp({ status, settings, save }) {
       </div>
       <p className="muted small">Links like WhatsApp Web. Use a separate business number: WhatsApp can ban numbers it thinks are automated.</p>
       <label className="switch">
-        <input type="checkbox" checked={!!settings.enabled} onChange={(e) => save({ whatsapp: { enabled: e.target.checked } })} />
+        <input type="checkbox" checked={!!settings.enabled} onChange={(e) => save({ whatsapp: { ...settings, enabled: e.target.checked } })} />
         <span>Enabled</span>
       </label>
       {status.status === 'qr' && status.qr && (
@@ -66,6 +66,21 @@ function WhatsApp({ status, settings, save }) {
         </div>
       )}
       {status.status === 'connected' && <p>Linked as <strong>{status.me}</strong></p>}
+      <label>
+        In groups (add the number to a WhatsApp group)
+        <select value={settings.groups || 'mention'} onChange={(e) => save({ whatsapp: { ...settings, groups: e.target.value } })}>
+          <option value="mention">Answer when mentioned, replied to, or called by name</option>
+          <option value="all">Answer every message</option>
+          <option value="off">Don't answer in groups</option>
+        </select>
+      </label>
+      {(settings.groups || 'mention') !== 'off' && status.status === 'connected' && <Groups settings={settings} save={save} />}
+      {(settings.groups || 'mention') === 'mention' && (
+        <label>
+          Names it answers to (comma-separated; the company name always works)
+          <input dir="auto" defaultValue={settings.group_names || ''} placeholder="Jarvis, جارفس" onBlur={(e) => e.target.value !== (settings.group_names || '') && save({ whatsapp: { ...settings, group_names: e.target.value } })} />
+        </label>
+      )}
       {settings.enabled && (
         <div className="row">
           <button onClick={() => api('/channels/whatsapp/restart', { method: 'POST' })}>Reconnect</button>
@@ -203,6 +218,29 @@ function Meta({ status, settings, save }) {
         <button className="primary" onClick={() => save({ meta: form })}>Save</button>
       </div>
       {status.missing && <div className="small muted">Still needed: {status.missing.join(', ')}</div>}
+    </div>
+  );
+}
+
+// Groups the number is in: the AI only talks in the ones ticked here.
+function Groups({ settings, save }) {
+  const [groups, setGroups] = useState(null);
+  const [error, setError] = useState('');
+  const load = () => api('/channels/whatsapp/groups').then(setGroups).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, []);
+  const allowed = settings.allowed_groups || [];
+  const toggle = (id, on) => save({ whatsapp: { ...settings, allowed_groups: on ? [...new Set([...allowed, id])] : allowed.filter((g) => g !== id) } });
+  return (
+    <div className="groups">
+      <div className="row small"><strong className="grow">Groups it may talk in</strong><button type="button" onClick={load}>Refresh</button></div>
+      {error && <div className="error small">{error}</div>}
+      {groups && !groups.length && <div className="muted small">Not in any group yet. Add the number to a group on your phone, then press Refresh.</div>}
+      {groups?.map((g) => (
+        <label key={g.id} className="switch small">
+          <input type="checkbox" checked={allowed.includes(g.id)} onChange={(e) => toggle(g.id, e.target.checked)} />
+          <span dir="auto">{g.subject} <span className="muted">({g.size} people)</span></span>
+        </label>
+      ))}
     </div>
   );
 }

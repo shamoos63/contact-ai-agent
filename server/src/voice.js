@@ -17,7 +17,7 @@ export function saveMedia(buffer, ext = 'ogg') {
 }
 
 // A customer sent a voice note: keep the audio, turn it into text, then treat it like a typed message.
-export async function handleVoiceNote({ buffer, ext, duration, ...incoming }) {
+export async function handleVoiceNote({ buffer, ext, duration, speaker = null, ...incoming }) {
   const audio = saveMedia(buffer, ext);
   const meta = { audio, duration, voice: true };
   if (!getSetting('voice').enabled) {
@@ -29,7 +29,7 @@ export async function handleVoiceNote({ buffer, ext, duration, ...incoming }) {
   try {
     const { text, language } = await transcribe(buffer);
     if (!text) throw new Error('No speech found in the recording');
-    handleIncoming({ ...incoming, text, meta: { ...meta, transcribed: true, spokenLanguage: language || null } });
+    handleIncoming({ ...incoming, text: speaker ? `${speaker}: ${text}` : text, meta: { ...meta, transcribed: true, spokenLanguage: language || null } });
   } catch (err) {
     console.error('[voice] Transcription failed:', err.message);
     const id = handleIncoming({ ...incoming, text: '🎤 Voice note', meta: { ...meta, transcribeError: err.message }, autoReply: false });
