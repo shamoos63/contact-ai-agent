@@ -39,6 +39,13 @@ class Native {
   /// A number opened from a "add a call note" notification, once.
   static Future<String?> pendingCallNote() => _ch.invokeMethod<String>('pendingCallNote');
 
+  /// "Hey <name>": listen on the phone for the wake phrase, then send the command to the agent.
+  static Future<void> wakeStart({required String name, required bool speak, required bool onlyCharging}) =>
+      _ch.invokeMethod('wakeStart', {'name': name, 'speak': speak, 'onlyCharging': onlyCharging});
+  static Future<void> wakeStop() => _ch.invokeMethod('wakeStop');
+  static Future<Map<String, dynamic>> wakeStatus() async =>
+      (await _ch.invokeMapMethod<String, dynamic>('wakeStatus')) ?? {'state': 'off'};
+
   static Future<List<Map<String, dynamic>>> callLab() async {
     final r = await _ch.invokeListMethod<Map>('callLab') ?? [];
     return r.map((m) => m.cast<String, dynamic>()).toList();

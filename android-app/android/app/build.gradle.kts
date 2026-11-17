@@ -51,4 +51,7 @@ flutter {
 dependencies {
     // FileProvider (camera photos) and NotificationCompat.
     implementation("androidx.core:core-ktx:1.16.0")
+    // "Hey <name>": offline wake phrase on the phone (Vosk, Apache-2.0).
+    implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
 }

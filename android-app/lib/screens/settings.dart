@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -7,10 +9,22 @@ import '../theme.dart';
 
 /// What this phone does in the background.
 class AppPrefs {
-  AppPrefs({required this.background, required this.missedCalls, required this.callNotes});
+  AppPrefs({
+    required this.background,
+    required this.missedCalls,
+    required this.callNotes,
+    this.wake = false,
+    this.wakeName = 'Jarvis',
+    this.wakeSpeak = true,
+    this.wakeCharging = false,
+  });
   bool background;
   bool missedCalls;
   bool callNotes;
+  bool wake; // "Hey <name>" wake phrase
+  String wakeName;
+  bool wakeSpeak;
+  bool wakeCharging;
 
   static Future<AppPrefs> load() async {
     final p = await SharedPreferences.getInstance();
@@ -18,6 +32,10 @@ class AppPrefs {
       background: p.getBool('bg') ?? true,
       missedCalls: p.getBool('missed_calls') ?? false,
       callNotes: p.getBool('call_notes') ?? false,
+      wake: p.getBool('wake') ?? false,
+      wakeName: p.getString('wake_name') ?? 'Jarvis',
+      wakeSpeak: p.getBool('wake_speak') ?? true,
+      wakeCharging: p.getBool('wake_charging') ?? false,
     );
   }
 
@@ -26,6 +44,20 @@ class AppPrefs {
     await p.setBool('bg', background);
     await p.setBool('missed_calls', missedCalls);
     await p.setBool('call_notes', callNotes);
+    await p.setBool('wake', wake);
+    await p.setString('wake_name', wakeName);
+    await p.setBool('wake_speak', wakeSpeak);
+    await p.setBool('wake_charging', wakeCharging);
+  }
+
+  /// Start or stop the wake phrase listener to match these settings.
+  Future<void> applyWake() async {
+    if (wake) {
+      await Native.requestPermissions(['microphone', 'notifications']);
+      await Native.wakeStart(name: wakeName, speak: wakeSpeak, onlyCharging: wakeCharging);
+    } else {
+      await Native.wakeStop();
+    }
   }
 }
 
@@ -40,11 +72,47 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   AppPrefs? _p;
   bool _running = false;
+  Map<String, dynamic> _wake = const {'state': 'off'};
+  Timer? _wakePoll;
+  final _wakeName = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _load();
+    _wakePoll = Timer.periodic(const Duration(seconds: 2), (_) async {
+      final w = await Native.wakeStatus();
+      if (mounted) setState(() => _wake = w);
+    });
+  }
+
+  @override
+  void dispose() {
+    _wakePoll?.cancel();
+    _wakeName.dispose();
+    super.dispose();
+  }
+
+  Future<void> _setWake(void Function(AppPrefs) change) async {
+    final p = _p!;
+    change(p);
+    await p.save();
+    await p.applyWake();
+    await _load();
+  }
+
+  String get _wakeLine {
+    final d = _wake['detail']?.toString();
+    return switch (_wake['state']) {
+      'downloading' => 'Getting the listening model (once, about 40 MB)… ${d ?? 0}%',
+      'listening' => 'Listening for "Hey ${_p?.wakeName ?? ''}"',
+      'recording' => 'I\'m listening…',
+      'thinking' => 'Thinking…',
+      'speaking' => 'Speaking…',
+      'paused' => d ?? 'Paused',
+      'error' => d ?? 'Something went wrong',
+      _ => 'Off',
+    };
   }
 
   Future<void> _load() async {
@@ -53,6 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() {
       _p = p;
       _running = r;
+      if (_wakeName.text.isEmpty) _wakeName.text = p.wakeName;
     });
   }
 
@@ -119,6 +188,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
         const SizedBox(height: 14),
+        if (p != null) _wakeCard(p),
+        const SizedBox(height: 14),
         Glass(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           child: Column(children: [
@@ -160,7 +231,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
         const SizedBox(height: 18),
-        const Center(child: Text('Agent companion · v0.1', style: TextStyle(color: AppColors.muted, fontSize: 12))),
+        const Center(child: Text('Agent companion · v0.2', style: TextStyle(color: AppColors.muted, fontSize: 12))),
+      ]),
+    );
+  }
+
+  Widget _wakeCard(AppPrefs p) {
+    final active = p.wake && _wake['state'] != 'off' && _wake['state'] != 'error';
+    return Glass(
+      glow: active ? AppColors.cyan : null,
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SwitchListTile(
+          value: p.wake,
+          onChanged: (v) => _setWake((x) => x.wake = v),
+          title: Text('Hey ${p.wakeName}'),
+          subtitle: Text(p.wake ? _wakeLine : 'Say "Hey ${p.wakeName}" and give a command, even with the app closed',
+              style: TextStyle(color: _wake['state'] == 'error' ? AppColors.red : AppColors.muted)),
+          secondary: const Icon(Icons.record_voice_over_rounded, color: AppColors.cyan),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: TextField(
+            controller: _wakeName,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: "Agent's name",
+              helperText: 'An English word that\'s easy to hear, e.g. Jarvis, Nova, Max',
+              isDense: true,
+            ),
+            onSubmitted: (v) {
+              final name = v.trim().replaceAll(RegExp(r'[^A-Za-z ]'), '');
+              if (name.isEmpty) return;
+              _wakeName.text = name;
+              _setWake((x) => x.wakeName = name);
+            },
+          ),
+        ),
+        SwitchListTile(
+          value: p.wakeSpeak,
+          onChanged: (v) => _setWake((x) => x.wakeSpeak = v),
+          title: const Text('Speak the answer out loud'),
+          secondary: const Icon(Icons.volume_up_rounded, color: AppColors.violet),
+        ),
+        SwitchListTile(
+          value: p.wakeCharging,
+          onChanged: (v) => _setWake((x) => x.wakeCharging = v),
+          title: const Text('Only while charging'),
+          subtitle: const Text('Saves battery: listens only when the phone is plugged in', style: TextStyle(color: AppColors.muted)),
+          secondary: const Icon(Icons.battery_charging_full_rounded, color: AppColors.green),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Text(
+            'Listening happens on the phone, offline. Nothing is sent until it hears "Hey" + the name. Android shows the microphone icon while it listens.',
+            style: TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+        ),
       ]),
     );
   }

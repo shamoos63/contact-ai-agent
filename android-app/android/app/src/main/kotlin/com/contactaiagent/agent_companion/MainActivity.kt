@@ -83,6 +83,23 @@ class MainActivity : FlutterActivity() {
             }
             "stopService" -> { AgentService.stop(this); result.success(null) }
             "serviceRunning" -> result.success(AgentService.running)
+            "wakeStart" -> {
+                WakeWordService.configure(
+                    this,
+                    true,
+                    call.argument<String>("name") ?: "Jarvis",
+                    call.argument<Boolean>("speak") != false,
+                    call.argument<Boolean>("onlyCharging") == true,
+                )
+                WakeWordService.start(this)
+                result.success(null)
+            }
+            "wakeStop" -> {
+                WakeWordService.configure(this, false, WakeWordService.config(this).name, WakeWordService.config(this).speak, WakeWordService.config(this).onlyCharging)
+                WakeWordService.stop(this)
+                result.success(null)
+            }
+            "wakeStatus" -> result.success(WakeWordService.status(this))
             "recentCalls" -> result.success(recentCalls())
             "pendingCallNote" -> { result.success(pendingCallNote); pendingCallNote = null }
             "callLab" -> thread { val r = CallLab.run(this); runOnUiThread { result.success(r) } }
