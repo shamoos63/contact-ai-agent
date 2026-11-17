@@ -52,7 +52,7 @@ export function buildRulesPrompt(conv = null) {
     `If the knowledge does not answer the question, reply with this message (translated to the customer's language): "${getSetting('fallback_message')}" and add [UNSURE] at the end.`,
   ];
   if (conv?.meta?.group) {
-    parts.push('GROUP CHAT: this is a WhatsApp group. Each message starts with the name of the person who wrote it ("Name: text"). Answer the last person who spoke to you, by name, briefly. Do not answer messages that were meant for other people in the group, and never start your reply with your own name and a colon.');
+    parts.push('GROUP CHAT: this is a WhatsApp group. Each message starts with the name of the person who wrote it ("Name: text"). Answer the last person who spoke to you, by name, briefly. Do not answer messages that were meant for other people in the group, and never start your reply with your own name and a colon. Never guess what the group is about or invent plans, meetings or events.');
     if (conv.meta.members?.length) parts.push(`People who have written in this group so far: ${conv.meta.members.join(', ')}. If asked who is in the group, name them (you only know the people who have written).`);
     parts.push('In the group, when the knowledge does not answer, say briefly that you don\'t know, in one short line; never say the team will contact them.');
   }
@@ -121,6 +121,8 @@ export function styleExamples(latest, language) {
 }
 
 // messages: [{ role: 'user' | 'assistant', content }]; the last one should be from the user.
+const WHO_IN_GROUP = /(مين\s+(معنا|معنا\s+ب|موجود|بالغروب|بالمجموعة|بالقروب|هون|في\s+(الغروب|المجموعة))|مين\s+الموجودين|مين\s+نحنا|who('?s|\s+is)\s+(in|here|on)\b|who\s+are\s+(we|the\s+members)|members\s+of\s+(this|the)\s+group)/i;
+
 export async function answer(messages, { conv = null } = {}) {
   const recentUser = messages.filter((m) => m.role === 'user').slice(-3).map((m) => m.content).join('\n');
   let knowledge = [];
@@ -131,6 +133,15 @@ export async function answer(messages, { conv = null } = {}) {
   }
   const language = detectLanguage(messages);
   const latest = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
+  // "مين معنا بالغروب؟": answered from the people who have written, never guessed.
+  if (conv?.meta?.group && WHO_IN_GROUP.test(latest)) {
+    const members = conv.meta.members || [];
+    const asker = latest.match(/^([^:]{1,40}):/)?.[1];
+    const reply = members.length
+      ? (language === 'Arabic' ? `${asker ? `${asker}، ` : ''}اللي حكوا بالغروب لهلق: ${members.join('، ')}. ما بشوف غير اللي بيكتبوا.` : `${asker ? `${asker}, ` : ''}people who have written here so far: ${members.join(', ')}. I only see people who write.`)
+      : (language === 'Arabic' ? 'لسا ما حدا كتب بالغروب، ما بشوف غير اللي بيكتبوا.' : "Nobody has written here yet; I only see people who write.");
+    return { reply, sources: [], language, tag: null, unsure: false };
+  }
   const topics = pendingTopic(conv) ? [] : matchTopics(latest, conv);
   const prompt = [
     // Fixed instructions first, then what changes per message, so the start of the prompt is reused.

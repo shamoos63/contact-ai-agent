@@ -76,7 +76,7 @@ export function startMockOllama() {
       }
       if (system.includes('AI assistant.') && system.includes('on behalf of')) {
         const draft = system.match(/^Draft: (.*)$/m)?.[1] || '';
-        const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? 'Hi, I am the assistant. ' : '';
+        const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? (system.includes('Write in Arabic') ? 'أهلا، أنا المساعد. ' : 'Hi, I am the assistant. ') : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
       }
       if (system.includes('You edit a short message before it is sent')) {

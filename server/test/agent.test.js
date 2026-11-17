@@ -566,7 +566,7 @@ test('assistant: messages are written from the owner\'s instructions, quotes are
     return sent.at(-1);
   };
   let reply = await say('احكي مع +963955123456 قلو كيفك وعرفو عن حالك', { action: 'send_message', to: '+963955123456', text: 'كيفك؟' }, 'w1');
-  assert.match(reply, /Hi, I am the assistant\. كيفك؟/);
+  assert.match(reply, /أهلا، أنا المساعد\. كيفك؟/);
   await say('لا', null, 'w2');
   reply = await say('send +963955123456 "see you at 5"', { action: 'send_message', to: '+963955123456', text: 'See you at five!' }, 'w3');
   assert.match(reply, /\n\nsee you at 5\n\n/);
@@ -1375,9 +1375,10 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   // 1. "Who should I send it to?" is asked once; an answer that isn't a name is a new request, read on its own.
   const first = await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm1');
   assert.match(first, /لمين بدك ابعتها/);
-  // "الي هون" (to me, here) sends it to the owner.
-  assert.match(await says('الي هون', null, 'sm2'), /واتساب إلى Hisham \(\+971508181818\)/);
-  await says('no', null, 'sm2b');
+  // "الي هون" is not a person: asked again, and nothing goes to the owner's own number.
+  assert.match(await says('الي هون', null, 'sm2'), /مين يعني/);
+  assert.match(await says('+971 50 818 1818', null, 'sm2b'), /لمين بدك ابعتها/);
+  await says('no', null, 'sm2e');
   // An answer that isn't a name is read on its own, without the old request.
   await says('قلو مرحبا', { action: 'send_message', to: null, text: 'مرحبا' }, 'sm2c');
   assert.equal(await says('شو الطقس', { action: 'chat', reply: 'مشمس' }, 'sm2d'), 'مشمس');
@@ -1437,7 +1438,15 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   // A placeholder is not a person.
   assert.equal(assistant.fixCommand({ action: 'send_message', to: 'اسم المستلم' }, 'ابعت رسالة', 'Arabic').to, null);
   // A complaint is not a request for the help list.
-  assert.match(await says('انت ما عم تفهم علي', { action: 'help' }, 'sm14'), /ما فهمت عليك/);
+  assert.match(await says('انت ما عم تفهم علي', { action: 'help' }, 'sm14'), /آسف 🙏 شو اللي ما زبط/);
+  assert.match(await says('انت ما عم تفهم', { action: 'chat', reply: 'أنا مساعد ذكاء اصطناعي' }, 'sm14b'), /آسف 🙏/);
+  assert.match(await says('بدي شي بس مش عارف شو', { action: 'chat', reply: null }, 'sm14c'), /ما فهمت عليك/);
+
+  // Drafts lose what the owner never said: a translation, Latin letters, feelings, an introduction.
+  const said = 'ابعت لسامر انو وصلت';
+  assert.equal(assistant.trimDraft('سامر، وصلت. اشتقتلك! (Translation: Samer, I arrived.)', said, 'Arabic', 'Hisham', 'TopTech'), 'سامر، وصلت.');
+  assert.equal(assistant.trimDraft('أعتذر عن الإزعاج. أنا هisham من TopTech. وصلت يا سامر.', said, 'Arabic', 'Hisham', 'TopTech'), 'وصلت يا سامر.');
+  assert.equal(assistant.trimDraft('اشتقتلك كتير', 'قلها انو اشتقتلها', 'Arabic', 'Hisham', 'TopTech'), 'اشتقتلك كتير');
   assert.doesNotMatch(await says('شو بتعرف تساوي؟', { action: 'help' }, 'sm15'), /ما فهمت عليك/);
 
   // 10. Groups: the AI knows who has written, and never promises the team will call.
@@ -1447,5 +1456,7 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   const rules = mods.agent.buildRulesPrompt(mods.inbox.getConversation(gid));
   assert.match(rules, /written in this group so far: Rami, Lina/);
   assert.match(rules, /never say the team will contact them/);
+  const who = await mods.agent.answer([{ role: 'user', content: 'Rami: hi' }, { role: 'user', content: 'Lina: مين معنا بالغروب؟' }], { conv: mods.inbox.getConversation(gid) });
+  assert.match(who.reply, /Lina، اللي حكوا بالغروب لهلق: Rami، Lina/);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });

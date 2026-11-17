@@ -58,6 +58,12 @@ export function ownerOf(conv) {
   return null;
 }
 
+function toAnOwner(target) {
+  if (target.conversationId) return isOwnerConversation(target.conversationId);
+  const d = digitsOf(target.phone || '');
+  return d.length >= 7 && (assistantSettings().owners || []).some((o) => o.phone && samePhone(o.phone, d));
+}
+
 export function isOwnerConversation(conversationId) {
   return !!ownerOf(getConversation(conversationId));
 }
@@ -327,15 +333,33 @@ function draftFits(draft, said) {
 }
 const EGYPTIAN = /(^|\s)(ازيك|إزيك|ازيّك|عامل ايه|عامل إيه|ايه|إيه|دلوقتي|كده|كدا|عايز|عايزة|اوي|أوي|بتاعك|بتاعي|خالص|ليه)(?=[\s،,.!؟?]|$)/;
 const MIXED = /[\u0600-\u06FF][A-Za-z]|[A-Za-z][\u0600-\u06FF]/;
-function badDraft(text, said, language, who, company) {
-  if (language !== 'Arabic') return false;
-  if (MIXED.test(text)) return true;
-  if (EGYPTIAN.test(text) && !EGYPTIAN.test(said)) return true;
-  // An introduction ("أنا مساعد هشام", the company name) the owner never asked for.
+// Things small models like to add that the owner never said: missing them, sorry for the bother, wishes.
+const EXTRAS = [/(اشتق|مشتاق|مشتقلك|وحشتني|وحشتيني)/, /(أعتذر|اعتذر|آسف|اسف|عذرا|عذراً|الإزعاج|الازعاج|sorry)/i, /(أتمنى|اتمنى|بتمنى|يارب|إن شاء الله|ان شاء الله)/];
+const latinWords = (t) => String(t).match(/[A-Za-z]{2,}/g) || [];
+// One sentence of a draft that doesn't belong: a translation, Latin letters in Arabic, Egyptian words,
+// an introduction or feelings the owner didn't ask for.
+function badSentence(sentence, said, language, who, company, recipient = '') {
+  if (/translation|ترجمة/i.test(sentence) && !/translat|ترجم/i.test(said)) return true;
+  if (EXTRAS.some((r) => r.test(sentence) && !r.test(said))) return true;
   const intro = /(عرف|عرّف|قدم|introduce)/i.test(said);
-  if (!intro && /(مساعد|assistant)/i.test(text) && !/(مساعد|assistant)/i.test(said)) return true;
-  if (!intro && company && company !== 'Our Company' && text.includes(company) && !said.includes(company)) return true;
-  return false;
+  if (!intro && /(مساعد|assistant)/i.test(sentence) && !/(مساعد|assistant)/i.test(said)) return true;
+  if (!intro && company && company !== 'Our Company' && sentence.includes(company) && !said.includes(company)) return true;
+  if (!intro && /(^|\s)(أنا|انا|معك|I am|I'm|this is)\s/i.test(sentence) && who && sentence.includes(who) && !said.includes(who)) return true;
+  if (language !== 'Arabic') return false;
+  if (MIXED.test(sentence)) return true;
+  if (EGYPTIAN.test(sentence) && !EGYPTIAN.test(said)) return true;
+  const allowed = new Set([...latinWords(said), ...latinWords(recipient)].map((w) => w.toLowerCase()));
+  return latinWords(sentence).some((w) => !allowed.has(w.toLowerCase()));
+}
+const sentencesOf = (text) => String(text).match(/[^.!؟?\n]+[.!؟?]*\s*/g) || [];
+function badDraft(text, said, language, who, company, recipient = '') {
+  return sentencesOf(text).some((x) => badSentence(x, said, language, who, company, recipient));
+}
+// Keep only the sentences the owner asked for. "(Translation: …)" and the like go first.
+export function trimDraft(text, said, language, who, company, recipient = '') {
+  let t = String(text || '');
+  if (language === 'Arabic' && !latinWords(said).length) t = t.replace(/\s*\([^)]*[A-Za-z][^)]*\)/g, '');
+  return sentencesOf(t).filter((x) => !badSentence(x, said, language, who, company, recipient)).join('').trim();
 }
 
 // Turn the owner's instruction ("tell him how are you and introduce yourself") into the message the
@@ -371,13 +395,17 @@ async function composeMessage(cmd, target, owner, language, isEmail) {
     if (out && out.split(/\s+/).length > Math.max(30, asked * 3)) {
       out = (await chat([{ role: 'system', content: `${system}\nAt most ${Math.max(12, asked * 2)} words. Only what ${who} asked to say.` }, { role: 'user', content: 'Write it now.' }], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
     }
-    // Latin letters glued into Arabic ("هisham"), Egyptian words, or an introduction nobody asked for: once more, strictly.
-    if (out && badDraft(out, cmd.said || '', language, who, company)) {
-      const again = (await chat([{ role: 'system', content: `${system}\nOnly what ${who} asked to say, in Arabic letters only, Syrian dialect, no introduction.` }, { role: 'user', content: 'Write it now.' }], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
-      if (again && !badDraft(again, cmd.said || '', language, who, company)) out = again;
+    // A translation, Latin letters in Arabic ("هisham"), Egyptian words, feelings or an introduction nobody
+    // asked for: once more, strictly, then drop whatever sentences are still extra.
+    const said = cmd.said || '';
+    if (out && badDraft(out, said, language, who, company, recipient)) {
+      const again = (await chat([{ role: 'system', content: `${system}\nOnly what ${who} asked to say, nothing else: no translation, no introduction, no apology, no feelings ${who} didn't mention.${language === 'Arabic' ? ' Arabic letters only, Syrian dialect.' : ''}` }, { role: 'user', content: 'Write it now.' }], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
+      out = [again, out].map((x) => (x && !CJK.test(x) ? trimDraft(x, said, language, who, company, recipient) : '')).find((x) => /\p{L}{2,}/u.test(x)) || '';
     }
     if (relation) out = out.replace(new RegExp(`^\\s*${relation}[،,!:]?\\s*`), '');
     if (out && !CJK.test(out)) return cleanDraft(out, target);
+    if (!out && cmd.text && draftFits(cmd.text, cmd.said)) return cmd.text;
+    if (!out) return cleanDraft(withoutPhoto(cmd.said || ''), target) || cmd.text;
   } catch (err) {
     console.error('[assistant] Writing the message failed:', err.message);
   }
@@ -615,9 +643,10 @@ async function finishWho(who, words, conv, owner, language) {
     const out = await act({ ...who.cmd, to: phone }, conv, owner, language);
     return typeof out === 'string' ? note + out : out;
   }
-  // "الي هون" / "to me": send it here, to the owner.
-  if (/^(ل?[اإ]لي|لالي|ل?عندي|me|to me|here)(\s+(هون|هنا|here))?$|^(هون|هنا|here)$/i.test(name) && owner?.phone) {
-    return act({ ...who.cmd, to: owner.phone }, conv, owner, language);
+  // "الي هون" / "here": not a person. Ask once more, keeping the request.
+  if (/^(ل?[اإ]لي|لالي|ل?عندي|me|to me|here)(\s+(هون|هنا|here))?$|^(هون|هنا|here)$/i.test(name)) {
+    updateMeta(conv.id, { assistantWho: { ...who, at: Date.now() } });
+    return asking(say(language, 'Who do you mean? Send me their name or number.', 'مين يعني؟ ابعتلي الاسم أو الرقم.'));
   }
   const parts = name.split(' ').filter(Boolean);
   if (!parts.length || parts.length > 2 || parts.some((p) => NOT_A_NAME.test(p) || !/^\p{L}{2,}$/u.test(p))) return null;
@@ -731,6 +760,8 @@ function needTime(cmd, language) {
 }
 
 const HELP_WORDS = /(help|what can you do|commands|menu|مساعدة|ساعدني|شو بتعرف|شو فيك|شو بتقدر|شو بتساوي|الأوامر|الاوامر|قائمة)/i;
+const COMPLAINT = /(ما عم تفهم|مش عم تفهم|ما فهمت|مو هيك|مش هيك|غلط|غبي|ما بتفهم|ركز|you don'?t understand|that'?s wrong|wrong|stupid|not what i (said|asked|meant))/i;
+const sorry = (language) => say(language, "Sorry about that 🙏 What did I get wrong? Tell me what you want and I'll redo it.", 'آسف 🙏 شو اللي ما زبط؟ قلي شو بدك بالضبط وبعيدها صح.');
 const notUnderstood = (language) => say(language, "Sorry, I didn't get that. Can you say it another way? (\"help\" shows what I can do)", 'آسف، ما فهمت عليك. فيك توضحلي شو بدك؟ (اكتب "مساعدة" لتشوف شو بقدر ساوي)');
 
 function helpText(language) {
@@ -871,7 +902,11 @@ async function act(cmd, conv, owner, language) {
     case 'send_message':
     case 'send_email': {
       const isEmail = cmd.action === 'send_email';
-      const target = cmd.target || (isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language, cmd.said, owner));
+      let target = cmd.target || (isEmail ? resolveEmail(cmd.to, language) : resolveRecipient(cmd.to, language, cmd.said, owner));
+      // Never message an owner's own number: that's this chat. Ask who it's for instead.
+      if (!isEmail && !target.ask && !target.choose && toAnOwner(target)) {
+        target = { ask: say(language, 'Who should I send it to? Send me their name or number.', 'لمين بدك ابعتها؟ ابعتلي الاسم أو الرقم.'), who: true };
+      }
       if (target.ask) {
         // Remember the message: the next answer is who it's for (asked once, never again in a loop).
         if (target.who) updateMeta(conv.id, { assistantWho: { cmd: { ...cmd, target: undefined }, name: target.name || null, at: Date.now() } });
@@ -1090,8 +1125,11 @@ async function act(cmd, conv, owner, language) {
       return inboxSummary(language, new Set(ownerConversationIds()));
     case 'help':
       if (HELP_WORDS.test(withoutPhoto(cmd.said || ''))) return helpText(language);
+      if (COMPLAINT.test(withoutPhoto(cmd.said || ''))) return sorry(language);
       return cmd.reply || notUnderstood(language);
     default:
+      // "انت ما عم تفهم": say sorry and offer to redo it, not a speech about being an AI.
+      if (cmd.action === 'chat' && COMPLAINT.test(withoutPhoto(cmd.said || '')) && withoutPhoto(cmd.said || '').split(/\s+/).length <= 8) return sorry(language);
       return cmd.reply || notUnderstood(language);
   }
 }
