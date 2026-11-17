@@ -12,6 +12,7 @@ import { addSkill, removeSkill, listSkills, takeDueJobs, describeSkill, addWish 
 import { WEEKDAYS } from './time.js';
 import { quietLeads, followupText, weeklyReport, profilesToUpdate, buildProfile } from './insights.js';
 import { createSource, indexSource } from '../kb/index.js';
+import { TRACK_WORDS, ASK_WORDS, parseDate, extractDeadlines, leadDays, saveDeadlines, listDeadlines, namedDeadlines, daysLeft } from './deadlines.js';
 import { fromLocal, toLocal, nowContext, pretty, localDayBounds, validTimeZone, dayFromWords } from './time.js';
 
 // The owner assistant: numbers chosen under "Assistant" can message the bot (text or voice) to give
@@ -98,6 +99,10 @@ export function normalizeAssistant(value) {
 }
 
 const say = (language, en, ar) => (language === 'Arabic' ? ar : en);
+const dueIn = (n, language) => (n < 0 ? say(language, `expired ${-n} days ago`, `منتهي من ${-n} يوم`)
+  : n === 0 ? say(language, 'today', 'اليوم') : say(language, `in ${n} days`, `بعد ${n} يوم`));
+// "ايمت بينتهي shop.com" names one; "شو اللي قرب ينتهي" doesn't.
+const namedLike = (said) => /\b[a-z0-9-]+\.[a-z]{2,}\b/i.test(said);
 // A question back to the owner. While it is open, "no" cancels instead of starting something new.
 const asking = (text) => ({ ask: text });
 
@@ -142,7 +147,7 @@ function describeTask(t, language) {
 }
 
 // --- Understanding the owner's message ---
-const ACTIONS = ['inbox', 'answer_customer', 'self_review', 'add_rule', 'add_job', 'skills', 'remove_skill', 'cannot_do', 'report', 'customer_info', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
+const ACTIONS = ['deadlines', 'deadline_info', 'inbox', 'answer_customer', 'self_review', 'add_rule', 'add_job', 'skills', 'remove_skill', 'cannot_do', 'report', 'customer_info', 'reminder', 'schedule', 'send_message', 'send_email', 'save_contact', 'forget_contact', 'contacts', 'web_search', 'read_link', 'learn', 'list', 'cancel', 'summary', 'help', 'chat'];
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -250,6 +255,17 @@ export function fixCommand(cmd, text, language, seen = text) {
     cmd.text = null;
     cmd.reply = null;
   }
+  // "احفظ تواريخ الدومينات وذكرني قبل ما تنتهي" with dates (typed or in a photo): track each one.
+  // A plain "remind me tomorrow…" without dates stays a reminder.
+  if (TRACK_WORDS.test(text) && (parseDate(seen) || PHOTO_BLOCK.test(said))) {
+    cmd.action = 'deadlines';
+    return finishFix(cmd, said, seen);
+  }
+  // "ايمت بينتهي example.com؟" / "شو الدومينات اللي قربت تنتهي؟"
+  if (ASK_WORDS.test(text) && /(\.[a-z]{2,}\b|دومين|domain|اشتراك|subscription|licen|رخصة|ترخيص|عقد|contract|استضافة|hosting|ssl)/i.test(text)) {
+    cmd.action = 'deadline_info';
+    return finishFix(cmd, said, seen);
+  }
   // "Did anyone message me?" is about the inbox, whatever the model called it.
   if (['chat', 'help', 'summary', 'send_message', 'list'].includes(cmd.action) && !(cmd.action === 'send_message' && cmd.to)
     && /(any(one|body)?\s+(sent|send|messaged|texted|wrote)|new messages|unread|who (wrote|messaged|texted|sent)|any messages|رسائل جديدة|رسايل جديدة|في رسايل|في رسائل|مين حكى|مين حاكى|مين بعت|حدا بعتلي|حدا حكى|حدا راسل|شو في جديد بالرسائل)/i.test(text)) cmd.action = 'inbox';
@@ -304,6 +320,9 @@ export function fixCommand(cmd, text, language, seen = text) {
     }
   }
   if (cmd.reply && CJK.test(cmd.reply)) cmd.reply = null;
+  return finishFix(cmd, said, seen);
+}
+function finishFix(cmd, said, seen) {
   cmd.said = said;
   cmd.seen = seen;
   return cmd;
@@ -815,6 +834,24 @@ async function carryOut(action, conv, owner, language) {
     indexSource(id).catch(() => {});
     return say(language, `📚 Added to Knowledge: "${action.title}". You can edit or delete it on the Knowledge page.`, `📚 انضافت للمعرفة: "${action.title}". فيك تعدلها أو تمسحها من صفحة Knowledge.`);
   }
+  if (action.kind === 'deadlines') {
+    const rows = saveDeadlines(ownerKey(owner), action.items);
+    let set = 0;
+    for (const d of rows) {
+      for (const lead of action.leads) {
+        const day = new Date(Date.parse(`${d.due_date}T00:00:00Z`) - lead * 86400e3).toISOString().slice(0, 10);
+        const at = fromLocal(`${day}T10:00`, tz);
+        if (at.getTime() <= Date.now()) continue;
+        insertTask({ kind: 'reminder', conv, owner, runAt: at, payload: { language, deadlineId: d.id, text: say(language, `${d.name} expires in ${lead} day${lead === 1 ? '' : 's'} (${d.due_date}). Renew it before then.`, `${d.name} بينتهي بعد ${lead} يوم (${d.due_date}). جدده قبل.`) } });
+        set++;
+      }
+    }
+    const today = toLocal(new Date(), tz).slice(0, 10);
+    const soon = rows.filter((d) => daysLeft(d.due_date, today) <= Math.min(...action.leads));
+    const warn = soon.length ? `\n⚠️ ${say(language, 'Soon', 'قريب')}: ${soon.map((d) => `${d.name} (${dueIn(daysLeft(d.due_date, today), language)})`).join(', ')}` : '';
+    return say(language, `✅ Saved ${rows.length}, with ${set} reminders. Ask me any time, e.g. "when does ${rows[0].name} expire?"${warn}`,
+      `✅ حفظت ${rows.length}، و${set} تذكير. اسألني أي وقت، مثلاً "ايمت بينتهي ${rows[0].name}؟"${warn}`);
+  }
   if (action.kind === 'followup') {
     let n = 0;
     for (const id of action.ids) {
@@ -1242,6 +1279,37 @@ async function act(cmd, conv, owner, language) {
       updateMeta(conv.id, { assistantPending: { action, at: Date.now() } });
       return `${say(language, `💬 Reply to ${q.label}:`, `💬 الرد على ${q.label}:`)}\n\n${text}\n\n${say(language, 'I\'ll also remember it for next time. Reply "yes" to send or "no" to cancel.', 'ورح احفظ الجواب للمرات الجاية. رد "نعم" للإرسال أو "لا" للإلغاء.')}`;
     }
+    case 'deadlines': {
+      // The photo sent with the request (or just before it) is where the dates usually are.
+      const pic = conv.meta.assistantPhoto;
+      const source = PHOTO_BLOCK.test(cmd.said || '') || !pic?.text || Date.now() - pic.at > CONFIRM_MINUTES * 60e3 ? cmd.said : `${cmd.said}\n${pic.text}`;
+      const items = await extractDeadlines(source);
+      if (!items.length) {
+        return asking(say(language,
+          'I couldn\'t find clear names and dates there. Type them like this, one per line:\nexample.com 2027-01-10',
+          'ما لقيت أسماء وتواريخ واضحة. اكتبلي ياهن هيك، كل واحد بسطر:\nexample.com 2027-01-10'));
+      }
+      const leads = leadDays(withoutPhoto(cmd.said || ''));
+      updateMeta(conv.id, { assistantPending: { action: { kind: 'deadlines', items, leads }, language, at: Date.now() } });
+      const today = toLocal(new Date(), tz).slice(0, 10);
+      const lines = items.map((i) => `• ${i.name}: ${i.date} (${dueIn(daysLeft(i.date, today), language)})`).join('\n');
+      const when = leads.join(language === 'Arabic' ? ' و' : ', ');
+      return say(language,
+        `📅 I found ${items.length}:\n${lines}\n\nSave them and remind you ${when} days before each? Reply "yes" or "no".`,
+        `📅 لقيت ${items.length}:\n${lines}\n\nبحفظهن وبذكرك قبل كل واحد بـ ${when} يوم؟ رد "نعم" أو "لا".`);
+    }
+    case 'deadline_info': {
+      const key = ownerKey(owner);
+      const today = toLocal(new Date(), tz).slice(0, 10);
+      const named = namedDeadlines(key, withoutPhoto(cmd.said || ''));
+      const all = listDeadlines(key);
+      if (!all.length) return say(language, 'No dates saved yet. Send me a screenshot or type them, e.g. "example.com 2027-01-10, remind me before it expires".', 'ما في تواريخ محفوظة لسا. ابعتلي صورة أو اكتبلي مثلاً "example.com 2027-01-10 وذكرني قبل ما ينتهي".');
+      if (!named.length && namedLike(withoutPhoto(cmd.said || ''))) {
+        return say(language, `I don't have that one saved. Saved: ${all.map((d) => d.name).join(', ')}.`, `ما عندي هاد محفوظ. المحفوظين: ${all.map((d) => d.name).join('، ')}.`);
+      }
+      const rows = named.length ? named : all.filter((d) => daysLeft(d.due_date, today) >= -30).slice(0, 15);
+      return rows.map((d) => `• ${d.name}: ${d.due_date} (${dueIn(daysLeft(d.due_date, today), language)})`).join('\n');
+    }
     case 'summary':
       return todaySummary(language, conv.id);
     case 'inbox':
@@ -1442,7 +1510,7 @@ async function processOwnerMessage(conversationId, messageId = null) {
           : kind === 'review' ? say(language, "OK, I won't learn those.", 'تمام، ما رح اتعلمهم.')
           : kind === 'skill' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
           : kind === 'followup' ? say(language, "OK, I won't follow up.", 'تمام، ما رح تابع معهم.')
-          : kind === 'learn' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
+          : kind === 'learn' || kind === 'deadlines' ? say(language, "OK, I didn't save it.", 'تمام، ما حفظتها.')
             : say(language, 'OK, not sent.', 'تمام، ما انبعتت.'));
       }
       // A bare number while a yes/no question is open is not a new request.

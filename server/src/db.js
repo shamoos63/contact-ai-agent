@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS owner_contacts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_owner_contacts ON owner_contacts(owner_key);
+-- Dates the owner asked to be reminded about (domains, licences, subscriptions…).
+CREATE TABLE IF NOT EXISTS deadlines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_deadlines ON deadlines(owner_key, due_date);
 -- Abilities owners taught by chat: rules for customer answers, and recurring jobs.
 CREATE TABLE IF NOT EXISTS skills (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
