@@ -41,6 +41,49 @@ function textOf(message) {
   );
 }
 
+// --- Groups ---
+// In a group the AI answers only when it's addressed (mentioned, replied to, or called by name),
+// unless the owner set it to answer everything. Each group is one chat in the inbox, and every
+// message there starts with the sender's name so the AI knows who said what.
+const groupNames = new Map(); // jid -> { subject, at }
+async function groupSubject(socket, jid) {
+  const cached = groupNames.get(jid);
+  if (cached && Date.now() - cached.at < 3600e3) return cached.subject;
+  try {
+    const meta = await socket.groupMetadata(jid);
+    groupNames.set(jid, { subject: meta.subject, at: Date.now() });
+    return meta.subject;
+  } catch {
+    return cached?.subject || 'WhatsApp group';
+  }
+}
+const digitsOf = (jid) => String(jid || '').split('@')[0].split(':')[0];
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function groupSettings() {
+  const w = getSetting('whatsapp');
+  return { mode: w.groups || 'mention', names: String(w.group_names || ''), allowed: Array.isArray(w.allowed_groups) ? w.allowed_groups : [] };
+}
+
+// The groups this number is in, and which ones the AI may talk in.
+export async function listGroups() {
+  if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
+  const all = await sock.groupFetchAllParticipating();
+  const { allowed } = groupSettings();
+  return Object.values(all).map((g) => ({ id: g.id, subject: g.subject, size: g.participants?.length || 0, allowed: allowed.includes(g.id) }))
+    .sort((a, b) => a.subject.localeCompare(b.subject));
+}
+
+// Is this group message for the AI? me: our own ids (phone and LID digits).
+export function addressedInGroup({ text = '', mentioned = [], quotedFrom = null }, me, { mode, names }) {
+  if (mode === 'all') return true;
+  const mine = new Set(me.filter(Boolean).map(digitsOf));
+  if (mentioned.some((j) => mine.has(digitsOf(j)))) return true;
+  if (quotedFrom && mine.has(digitsOf(quotedFrom))) return true;
+  const words = [...names.split(/[,،\n]/), getSetting('company_name')].map((w) => w.trim()).filter((w) => w.length >= 2 && w !== 'Our Company');
+  return words.some((w) => new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(w)}($|[^\\p{L}\\p{N}])`, 'iu').test(text));
+}
+
 export async function startWhatsApp(onChange) {
   if (onChange) notify = onChange;
   await stopWhatsApp();
@@ -89,7 +132,11 @@ export async function startWhatsApp(onChange) {
     if (type !== 'notify') return;
     for (const m of messages) {
       const jid = m.key.remoteJid;
-      if (m.key.fromMe || !jid || jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter')) continue;
+      if (m.key.fromMe || !jid || jid === 'status@broadcast' || jid.endsWith('@newsletter')) continue;
+      if (jid.endsWith('@g.us')) {
+        handleGroupMessage(socket, m).catch((err) => console.error('[whatsapp] Group message failed:', err.message));
+        continue;
+      }
       const phoneJid = m.key.senderPn || m.key.remoteJidAlt || (jid.endsWith('@s.whatsapp.net') ? jid : null);
       const phone = phoneJid ? '+' + phoneJid.split('@')[0] : null;
       const sender = {
@@ -124,6 +171,48 @@ export async function startWhatsApp(onChange) {
       handleIncoming({ ...sender, text });
     }
   });
+}
+
+async function handleGroupMessage(socket, m) {
+  const g = groupSettings();
+  const jid = m.key.remoteJid;
+  // Only groups the owner allowed: anyone can add the number to a group, that alone isn't enough.
+  if (g.mode === 'off' || !g.allowed.includes(jid)) return;
+  const inner = m.message?.ephemeralMessage?.message || m.message?.viewOnceMessage?.message || m.message;
+  if (!inner) return;
+  const ctx = Object.values(inner).find((v) => v && typeof v === 'object' && v.contextInfo)?.contextInfo || {};
+  const raw = textOf(m.message) || '';
+  const me = [socket.user?.id, socket.user?.lid];
+  const addressed = addressedInGroup({ text: raw, mentioned: ctx.mentionedJid || [], quotedFrom: ctx.participant || null }, me, g);
+  const who = m.key.participantPn || m.key.participantAlt || m.key.participant || '';
+  const phone = who.endsWith('@s.whatsapp.net') ? `+${digitsOf(who)}` : null;
+  const name = m.pushName || phone || 'Someone';
+  // Our own @mention reads as a number: take it out.
+  const mine = me.filter(Boolean).map(digitsOf);
+  const said = mine.reduce((t, d) => t.replace(new RegExp(`@${d}\\b`, 'g'), ''), raw).replace(/\s{2,}/g, ' ').trim();
+  const sender = {
+    channel: 'whatsapp',
+    externalId: jid,
+    name: await groupSubject(socket, jid),
+    handle: 'group',
+    messageId: m.key.id,
+    convMeta: { group: true },
+    autoReply: addressed,
+  };
+  const audio = inner.audioMessage;
+  const picture = inner.imageMessage || (inner.documentMessage?.mimetype?.startsWith('image/') ? inner.documentMessage : null);
+  // Voice notes and photos take a while to read: only the ones meant for the AI.
+  if ((audio || picture) && !addressed) return;
+  if (audio) {
+    const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: socket.updateMediaMessage });
+    return handleVoiceNote({ ...sender, buffer, ext: 'ogg', duration: audio.seconds, speaker: name });
+  }
+  if (picture) {
+    const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: socket.updateMediaMessage });
+    return handleImage({ ...sender, buffer, caption: `${name}: ${said}`.replace(/:\s*$/, ':') });
+  }
+  if (!said) return;
+  handleIncoming({ ...sender, text: `${name}: ${said}`, meta: { group: true, from: name, ...(phone ? { phone } : {}) } });
 }
 
 // Send a WhatsApp message to any number, e.g. a lead brief to a sales team member.
