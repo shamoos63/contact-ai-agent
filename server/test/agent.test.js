@@ -897,6 +897,9 @@ test('photos: the assistant reads a business card, saves the number from it, and
   assert.deepEqual(leadDays('ذكرني قبل اسبوع'), [7]);
   // "remind me tomorrow…" without dates is still a plain reminder.
   assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'x' }, 'ذكرني بكرا الساعة 10 انو الاشتراك بينتهي', 'Arabic').action, 'reminder');
+  // …and its text is the owner's words, not things the model brought in from older messages.
+  assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'بتجديد اشتراك shop-example.com الساعة 10 صباحاً غداً' }, 'ذكرني بكرا الساعة 10 جدد الاشتراك', 'Arabic').text, 'جدد الاشتراك');
+  assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'call Ahmad' }, 'remind me tomorrow at 10 to call Ahmad', 'English').text, 'call Ahmad');
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
 
