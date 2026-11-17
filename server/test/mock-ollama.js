@@ -65,7 +65,9 @@ export function startMockOllama() {
       if (data.messages.some((m) => m.images?.length)) {
         lastVision.value = data;
         if (data.model === 'missing-vl') { res.statusCode = 404; return res.end(JSON.stringify({ error: `model "${data.model}" not found, try pulling it first` })); }
-        return res.end(JSON.stringify({ message: { role: 'assistant', content: visionAnswers.shift() || 'A photo of a red phone.' } }));
+        const seen = visionAnswers.shift();
+        if (seen === 'MISSING') { res.statusCode = 404; return res.end(JSON.stringify({ error: "model 'qwen2.5vl:7b' not found" })); }
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: seen || 'A photo of a red phone.' } }));
       }
       const system = data.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
       if (system.includes('Below are web pages, numbered.')) {
