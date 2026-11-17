@@ -123,7 +123,13 @@ class _CallsScreenState extends State<CallsScreen> {
           Row(children: [
             const Icon(Icons.phone_missed_rounded, color: AppColors.cyan),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Missed call → WhatsApp', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16))),
+            const Expanded(
+              child: Row(children: [
+                Text('Missed call', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Icon(Icons.arrow_forward_rounded, size: 18, color: AppColors.muted)),
+                Text('WhatsApp', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+              ]),
+            ),
             Switch(
               value: _missedReply == true,
               onChanged: _missedReply == null

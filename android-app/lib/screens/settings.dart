@@ -106,7 +106,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 value: p.missedCalls,
                 onChanged: p.background ? (v) => _set((x) => x.missedCalls = v) : null,
                 title: const Text('Report missed calls'),
-                subtitle: const Text('Tell the agent about calls nobody answered (it messages them only if "Missed call → WhatsApp" is on)', style: TextStyle(color: AppColors.muted)),
+                subtitle: const Text('Tell the agent about calls nobody answered (it messages the caller only if that is on in the Calls tab)', style: TextStyle(color: AppColors.muted)),
                 secondary: const Icon(Icons.phone_missed_rounded, color: AppColors.violet),
               ),
               SwitchListTile(

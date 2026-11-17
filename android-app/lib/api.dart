@@ -1,13 +1,19 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Talks to the Contact AI Agent dashboard (same sign-in as the web dashboard).
 class Api {
   Api._();
-  static final Api instance = Api._();
+
+  /// For tests and screenshots: a stand-in that returns sample data.
+  @visibleForTesting
+  Api.forTest();
+
+  static Api instance = Api._();
 
   String base = '';
   String? cookie;

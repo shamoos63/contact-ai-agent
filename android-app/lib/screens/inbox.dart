@@ -275,7 +275,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 itemBuilder: (_, i) {
                   final m = _messages[i];
                   // Customer on the left, the business (AI or team) on the right.
-                  return MessageBubble(m: m, mine: m.direction == 'out', playing: _playingId == m.id, onPlay: m.audio == null ? null : () => _play(m));
+                  return MessageBubble(
+                    m: m,
+                    mine: m.direction == 'out',
+                    otherInitial: widget.title.characters.first.toUpperCase(),
+                    playing: _playingId == m.id,
+                    onPlay: m.audio == null ? null : () => _play(m),
+                  );
                 },
               ),
             ),

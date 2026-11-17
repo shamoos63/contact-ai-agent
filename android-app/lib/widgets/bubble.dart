@@ -5,12 +5,15 @@ import '../theme.dart';
 
 /// One chat message. Owner (or customer) on the right, the agent on the left.
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.m, required this.mine, this.onPlay, this.playing = false, this.agentLabel = 'Agent'});
+  const MessageBubble({super.key, required this.m, required this.mine, this.onPlay, this.playing = false, this.agentLabel = 'Agent', this.otherInitial});
   final Message m;
   final bool mine;
   final VoidCallback? onPlay;
   final bool playing;
   final String agentLabel;
+
+  /// In a customer chat the left side is the customer: show their initial instead of the agent's mark.
+  final String? otherInitial;
 
   @override
   Widget build(BuildContext context) {
@@ -100,8 +103,12 @@ class MessageBubble extends StatelessWidget {
               width: 26,
               height: 26,
               margin: const EdgeInsets.only(right: 6, bottom: 2),
-              decoration: const BoxDecoration(shape: BoxShape.circle, gradient: AppColors.accent),
-              child: const Icon(Icons.auto_awesome_rounded, size: 14, color: Colors.white),
+              decoration: otherInitial == null
+                  ? const BoxDecoration(shape: BoxShape.circle, gradient: AppColors.accent)
+                  : BoxDecoration(shape: BoxShape.circle, color: AppColors.violet.withValues(alpha: 0.3)),
+              child: otherInitial == null
+                  ? const Icon(Icons.auto_awesome_rounded, size: 14, color: Colors.white)
+                  : Center(child: Text(otherInitial!, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
             ),
           ],
           Flexible(child: bubble),

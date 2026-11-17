@@ -69,12 +69,13 @@ class Glass extends StatelessWidget {
     final box = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: AppColors.card,
+        // A highlighted card gets a tinted fill and border (a shadow would show through the glass).
+        color: glow?.withValues(alpha: 0.10) ?? AppColors.card,
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: glow?.withValues(alpha: 0.45) ?? AppColors.cardBorder),
-        boxShadow: glow == null ? null : [BoxShadow(color: glow!.withValues(alpha: 0.18), blurRadius: 24, spreadRadius: -6)],
+        border: Border.all(color: glow?.withValues(alpha: 0.5) ?? AppColors.cardBorder),
       ),
-      child: child,
+      // Its own Material, so list rows inside the card keep their tap ripple.
+      child: Material(type: MaterialType.transparency, child: child),
     );
     if (onTap == null) return box;
     return Material(color: Colors.transparent, child: InkWell(borderRadius: BorderRadius.circular(radius), onTap: onTap, child: box));
