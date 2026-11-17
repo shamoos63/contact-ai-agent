@@ -863,7 +863,7 @@ test('photos: the assistant reads a business card, saves the number from it, and
   // A photo that can't be read: no guessing from the caption. Sent again, it finishes the request.
   visionAnswers.push('MISSING');
   const before = assistantAnswers.length;
-  await handleImage({ ...owner, buffer: png, caption: 'احفظ الدومينات يلي بالصورة', messageId: 'card5' });
+  await handleImage({ ...owner, buffer: png, caption: 'ضيف يلي بالصورة للمعرفة', messageId: 'card5' });
   await wait();
   assert.match(sent.at(-1), /ما قدرت اقرأ الصورة: موديل الصور لسا عم ينزّل\. ابعتلي ياها كمان مرة/);
   assert.equal(assistantAnswers.length, before);
@@ -874,6 +874,29 @@ test('photos: the assistant reads a business card, saves the number from it, and
   assert.match(sent.at(-1), /هاد اللي رح ضيفه:\n\nA table\. Text: example\.com 2027-01-10/);
   mods.inbox.handleIncoming({ ...owner, text: 'لا', messageId: 'card7' });
   await wait();
+
+  // Domains and expiry dates from a screenshot: saved after "yes", reminders before each, and answered later.
+  visionAnswers.push('A table of domains. Text: toptech.com.sy 2027-01-10 | shop-example.com 15/12/2026 | Status Active');
+  assistantAnswers.push({ action: 'reminder', text: 'domains' });
+  await handleImage({ ...owner, buffer: png, caption: 'احفظ التواريخ والدومينات يلي بالصورة وذكرني قبل ما ينتهي اي واحد منن', messageId: 'dom1' });
+  await wait();
+  assert.match(sent.at(-1), /📅 لقيت 2:\n• toptech\.com\.sy: 2027-01-10 \(بعد \d+ يوم\)\n• shop-example\.com: 2026-12-15/);
+  assert.match(sent.at(-1), /بذكرك قبل كل واحد بـ 30 و7 و1 يوم/);
+  mods.inbox.handleIncoming({ ...owner, text: 'نعم', messageId: 'dom2' });
+  await wait();
+  assert.match(sent.at(-1), /✅ حفظت 2، و\d+ تذكير/);
+  const reminders = mods.db.prepare("SELECT payload FROM tasks WHERE status = 'pending' AND kind = 'reminder' AND payload LIKE '%deadlineId%'").all();
+  assert.ok(reminders.some((r) => JSON.parse(r.payload).text.includes('toptech.com.sy بينتهي بعد 30 يوم')));
+  assistantAnswers.push({ action: 'chat', reply: 'بعد شهر' });
+  mods.inbox.handleIncoming({ ...owner, text: 'ايمت بينتهي toptech.com.sy؟', messageId: 'dom3' });
+  await wait();
+  assert.match(sent.at(-1), /^• toptech\.com\.sy: 2027-01-10 \(بعد \d+ يوم\)$/);
+  // A typed list works too, and a date the text doesn't have is never made up.
+  const { extractDeadlines, leadDays } = await import('../src/assistant/deadlines.js');
+  assert.deepEqual(await extractDeadlines('my-site.net expires Jan 5, 2027\nother.org 2027-03-01'), [{ name: 'my-site.net', date: '2027-01-05' }, { name: 'other.org', date: '2027-03-01' }]);
+  assert.deepEqual(leadDays('ذكرني قبل اسبوع'), [7]);
+  // "remind me tomorrow…" without dates is still a plain reminder.
+  assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'x' }, 'ذكرني بكرا الساعة 10 انو الاشتراك بينتهي', 'Arabic').action, 'reminder');
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
 
