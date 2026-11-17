@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { getSetting } from '../settings.js';
-import { handleIncoming, registerSender, registerVoiceSender, registerImageSender } from '../inbox.js';
+import { handleIncoming, registerSender, registerVoiceSender, registerImageSender, registerPresence } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 
 let bot = null;
@@ -104,3 +104,9 @@ registerImageSender('telegram', async (conv, image, caption) => {
   const sent = await bot.api.sendPhoto(conv.external_id, new InputFile(image, 'photo.jpg'), caption ? { caption } : {});
   return { externalId: `${conv.external_id}:${sent.message_id}` };
 });
+
+// "typing…" / "recording a voice message…": Telegram shows it for 5 seconds, so it's renewed every 4.
+registerPresence('telegram', async (chatId, kind) => {
+  if (!bot || kind === 'paused') return; // it ends by itself when the message arrives
+  await bot.api.sendChatAction(chatId, kind === 'recording' ? 'record_voice' : 'typing');
+}, 4000);
