@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Every privileged permission the Agent companion app requests (check with
+     `aapt dump permissions`; a missing one can stop Android from booting when
+     ro.control_privapp_permissions=enforce). -->
+<permissions>
+    <privapp-permissions package="com.contactaiagent.agent_companion">
+        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
+        <permission name="android.permission.MODIFY_AUDIO_ROUTING" />
+        <permission name="android.permission.MODIFY_PHONE_STATE" />
+    </privapp-permissions>
+</permissions>

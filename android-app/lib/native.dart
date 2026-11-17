@@ -46,6 +46,12 @@ class Native {
   static Future<Map<String, dynamic>> wakeStatus() async =>
       (await _ch.invokeMapMethod<String, dynamic>('wakeStatus')) ?? {'state': 'off'};
 
+  /// During a real call: can the app hear the call and speak into it?
+  static Future<List<Map<String, dynamic>>> liveCallTest() async {
+    final r = await _ch.invokeListMethod<Map>('liveCallTest') ?? [];
+    return r.map((m) => m.cast<String, dynamic>()).toList();
+  }
+
   static Future<List<Map<String, dynamic>>> callLab() async {
     final r = await _ch.invokeListMethod<Map>('callLab') ?? [];
     return r.map((m) => m.cast<String, dynamic>()).toList();

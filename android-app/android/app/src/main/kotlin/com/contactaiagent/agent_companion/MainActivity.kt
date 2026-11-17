@@ -103,6 +103,7 @@ class MainActivity : FlutterActivity() {
             "recentCalls" -> result.success(recentCalls())
             "pendingCallNote" -> { result.success(pendingCallNote); pendingCallNote = null }
             "callLab" -> thread { val r = CallLab.run(this); runOnUiThread { result.success(r) } }
+            "liveCallTest" -> thread { val r = LiveCallTest.run(this); runOnUiThread { result.success(r) } }
             else -> result.notImplemented()
         }
     }

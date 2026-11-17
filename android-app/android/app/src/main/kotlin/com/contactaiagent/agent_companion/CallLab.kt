@@ -49,6 +49,11 @@ object CallLab {
                 "Default phone app: ${if (dialer) "yes" else "no"} · Call screening: ${if (screening) "yes" else "no"} (needed later to answer calls automatically)")
         }
 
+        val info = ctx.applicationInfo
+        val system = info.flags and (android.content.pm.ApplicationInfo.FLAG_SYSTEM or android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        out += item("Installed as system app", if (system) "ok" else "warn",
+            if (system) "Yes: installed through the Magisk module" else "No. Install the Magisk module (tool/magisk-module) and reboot.")
+
         val capture = ctx.checkSelfPermission("android.permission.CAPTURE_AUDIO_OUTPUT") == PackageManager.PERMISSION_GRANTED
         out += item("Privileged audio permission", if (capture) "ok" else "warn",
             if (capture) "CAPTURE_AUDIO_OUTPUT granted: the app can hear calls"

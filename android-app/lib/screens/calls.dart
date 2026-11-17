@@ -98,6 +98,19 @@ class _CallsScreenState extends State<CallsScreen> {
     });
   }
 
+  Future<void> _runLiveTest() async {
+    setState(() {
+      _labRunning = true;
+      _lab = null;
+    });
+    await Native.requestPermissions(['microphone', 'phone']);
+    final r = await Native.liveCallTest();
+    if (mounted) setState(() {
+      _lab = r;
+      _labRunning = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -223,6 +236,12 @@ class _CallsScreenState extends State<CallsScreen> {
           ),
           const SizedBox(height: 12),
           GradientButton(label: _labRunning ? 'Checking…' : 'Run checks', icon: Icons.play_arrow_rounded, busy: _labRunning, onPressed: _runLab),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _labRunning ? null : _runLiveTest,
+            icon: const Icon(Icons.phone_in_talk_rounded),
+            label: const Text('Live call test (during a call, about 30 s)'),
+          ),
           if (_lab != null) ...[
             const SizedBox(height: 12),
             for (final r in _lab!)

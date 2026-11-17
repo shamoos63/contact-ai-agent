@@ -231,7 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
         const SizedBox(height: 18),
-        const Center(child: Text('Agent companion · v0.2', style: TextStyle(color: AppColors.muted, fontSize: 12))),
+        const Center(child: Text('Agent companion · v0.3', style: TextStyle(color: AppColors.muted, fontSize: 12))),
       ]),
     );
   }
