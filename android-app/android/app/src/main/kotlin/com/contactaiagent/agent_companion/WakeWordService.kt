@@ -86,16 +86,35 @@ class WakeWordService : Service(), RecognitionListener {
     // --- Model ---
 
     private fun prepare() {
+        val dir = File(filesDir, MODEL_DIR)
         try {
-            val dir = File(filesDir, MODEL_DIR)
-            if (!File(dir, "am/final.mdl").exists()) downloadModel(dir)
+            if (!modelComplete(dir)) downloadModel(dir)
+        } catch (e: Throwable) {
+            Log.w(TAG, "download: ${e.message}")
+            dir.deleteRecursively()
+            return giveUp("Couldn't download the listening model (${e.message}). Turn it on again to retry.")
+        }
+        try {
             model = Model(dir.absolutePath)
             main.post { listen() }
-        } catch (e: Exception) {
-            Log.w(TAG, "prepare: ${e.message}")
-            setStatus("error", "Couldn't get the listening model: ${e.message}")
-            update("Couldn't start: ${e.message}")
+        } catch (e: Throwable) {
+            // Native load errors (UnsatisfiedLinkError, a damaged model…) are Errors, not Exceptions:
+            // catch everything, switch the wake word off and say why, never crash the app.
+            Log.e(TAG, "model load failed", e)
+            if (e !is UnsatisfiedLinkError) dir.deleteRecursively() // a damaged model is downloaded again next time
+            giveUp("\"Hey ${cfg().name}\" couldn't start on this phone (${e.javaClass.simpleName}). It's turned off; the rest of the app works.")
         }
+    }
+
+    // All the files the small English model needs; a partial download is redone.
+    private fun modelComplete(dir: File) =
+        listOf("am/final.mdl", "conf/mfcc.conf", "conf/model.conf", "graph/Gr.fst", "ivector/final.ie").all { File(dir, it).length() > 0 }
+
+    private fun giveUp(note: String) {
+        configure(this, false, cfg().name, cfg().speak, cfg().onlyCharging)
+        setStatus("error", note)
+        notifyReply(note)
+        main.post { stopSelf() }
     }
 
     private fun downloadModel(dir: File) {
@@ -121,6 +140,7 @@ class WakeWordService : Service(), RecognitionListener {
                 }
             }
         }
+        if (zip.length() < total) { zip.delete(); throw IllegalStateException("download incomplete (${zip.length()} of $total bytes)") }
         // The zip has one top folder (vosk-model-small-en-us-0.15/…): unpack its contents into dir.
         val tmp = File(filesDir, "$MODEL_DIR.tmp").apply { deleteRecursively(); mkdirs() }
         ZipInputStream(zip.inputStream().buffered()).use { z ->
@@ -136,6 +156,7 @@ class WakeWordService : Service(), RecognitionListener {
         zip.delete()
         dir.deleteRecursively()
         if (!tmp.renameTo(dir)) throw IllegalStateException("couldn't unpack the model")
+        if (!modelComplete(dir)) { dir.deleteRecursively(); throw IllegalStateException("the model is incomplete") }
     }
 
     // --- Listening for the phrase ---
@@ -170,7 +191,7 @@ class WakeWordService : Service(), RecognitionListener {
             speech = SpeechService(rec, 16000f).also { it.startListening(this) }
             setStatus("listening", phrase())
             update("Listening for \"${cfg().name}\"")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "listen: ${e.message}")
             setStatus("error", e.message)
             main.postDelayed({ listen() }, 10_000)
@@ -417,7 +438,10 @@ class WakeWordService : Service(), RecognitionListener {
 
         fun status(ctx: Context): Map<String, Any?> {
             val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            return mapOf("running" to running, "state" to (if (running) p.getString("state", "starting") else "off"), "detail" to p.getString("detail", null))
+            val last = p.getString("state", null)
+            // After a failure the service stops, but the reason stays visible until it is turned on again.
+            val state = if (running) last ?: "starting" else if (last == "error") "error" else "off"
+            return mapOf("running" to running, "state" to state, "detail" to p.getString("detail", null), "enabled" to enabled(ctx))
         }
 
         fun start(ctx: Context) {

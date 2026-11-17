@@ -231,7 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
         const SizedBox(height: 18),
-        const Center(child: Text('Agent companion · v0.2', style: TextStyle(color: AppColors.muted, fontSize: 12))),
+        const Center(child: Text('Agent companion · v0.4.2', style: TextStyle(color: AppColors.muted, fontSize: 12))),
       ]),
     );
   }
@@ -246,7 +246,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           value: p.wake,
           onChanged: (v) => _setWake((x) => x.wake = v),
           title: Text('Hey ${p.wakeName}'),
-          subtitle: Text(p.wake ? _wakeLine : 'Say "Hey ${p.wakeName}" and give a command, even with the app closed',
+          subtitle: Text(p.wake || _wake['state'] == 'error' ? _wakeLine : 'Say "Hey ${p.wakeName}" and give a command, even with the app closed',
               style: TextStyle(color: _wake['state'] == 'error' ? AppColors.red : AppColors.muted)),
           secondary: const Icon(Icons.record_voice_over_rounded, color: AppColors.cyan),
         ),
