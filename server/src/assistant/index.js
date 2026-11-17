@@ -99,8 +99,10 @@ export function normalizeAssistant(value) {
 }
 
 const say = (language, en, ar) => (language === 'Arabic' ? ar : en);
-const dueIn = (n, language) => (n < 0 ? say(language, `expired ${-n} days ago`, `منتهي من ${-n} يوم`)
-  : n === 0 ? say(language, 'today', 'اليوم') : say(language, `in ${n} days`, `بعد ${n} يوم`));
+// "يوم", "يومين", "3 أيام", "54 يوم".
+const arDays = (n) => (n === 1 ? 'يوم' : n === 2 ? 'يومين' : n <= 10 ? `${n} أيام` : `${n} يوم`);
+const dueIn = (n, language) => (n < 0 ? say(language, `expired ${-n} day${n === -1 ? '' : 's'} ago`, `منتهي من ${arDays(-n)}`)
+  : n === 0 ? say(language, 'today', 'اليوم') : say(language, `in ${n} day${n === 1 ? '' : 's'}`, `بعد ${arDays(n)}`));
 // "ايمت بينتهي shop.com" names one; "شو اللي قرب ينتهي" doesn't.
 const namedLike = (said) => /\b[a-z0-9-]+\.[a-z]{2,}\b/i.test(said);
 // A question back to the owner. While it is open, "no" cancels instead of starting something new.
@@ -223,6 +225,18 @@ async function understand(conv, owner, language, text, { instruction = false, fr
   return fixCommand(cmd, text, language, seen);
 }
 
+// More than one word (or any name like "shop.com") in the model's text that the owner never wrote.
+function addsWords(out, said) {
+  const mine = nameWords(String(said).replace(/[^\p{L}\p{N}.\s]/gu, ' ')).flatMap(variants).map((w) => w.toLowerCase());
+  const keys = new Set(mine.map(skeleton).filter((k) => k.length >= 2));
+  const extra = nameWords(String(out).replace(/[^\p{L}\p{N}.\s]/gu, ' ')).filter((w) => {
+    const v = variants(w);
+    if (v.some((x) => mine.includes(x.toLowerCase()))) return false;
+    const k = skeleton(v[v.length - 1]);
+    return k.length >= 2 && ![...keys].some((m) => m.includes(k) || k.includes(m));
+  });
+  return extra.some((w) => /\.[a-z]{2,}/i.test(w)) || extra.length > 1;
+}
 const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
 const REMIND_ME = /^\s*(please\s+)?(remind\s+me\s+(to\s+|about\s+|that\s+)?|ذكر(ني|نى)\s*|تذكر(ني|نى)\s*|فكرني\s*)/i;
 const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكرة|غدا|غدًا|غداً|اليوم|الأحد|الاحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الاربعاء|الخميس|الجمعة|السبت)|(on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday))?[\s,،]*(الساعة|الساعه|ع\s*الساعة|at)\s*\d{1,2}([:.]\d{2})?\s*(الصبح|الصباح|صباحا|صباحاً|المسا|المساء|مساء|مساءً|العصر|عصرا|الظهر|ظهرا|بالليل|am|pm|a\.m\.|p\.m\.)?[\s.!]*$/i;
@@ -291,6 +305,8 @@ export function fixCommand(cmd, text, language, seen = text) {
   if (cmd.action === 'reminder' || cmd.action === 'schedule') {
     // Chinese, or Arabic for an owner who wrote in English: use the owner's own words instead.
     if (cmd.text && (CJK.test(cmd.text) || (language === 'English' && /[\u0600-\u06FF]/.test(cmd.text)))) cmd.text = null;
+    // The model added things from older messages ("اشتراك shop-example.com"): the owner's own words instead.
+    if (cmd.text && addsWords(cmd.text, text)) cmd.text = null;
     if (!cmd.text) cmd.text = text.replace(REMIND_ME, '').replace(TIME_LEAD, '').trim() || null;
     if (cmd.text) cmd.text = cmd.text.replace(REMIND_ME, '').replace(RELATIVE, '').replace(TIME_LEAD, '').replace(TIME_PHRASE, '').trim() || cmd.text;
   }
@@ -842,7 +858,7 @@ async function carryOut(action, conv, owner, language) {
         const day = new Date(Date.parse(`${d.due_date}T00:00:00Z`) - lead * 86400e3).toISOString().slice(0, 10);
         const at = fromLocal(`${day}T10:00`, tz);
         if (at.getTime() <= Date.now()) continue;
-        insertTask({ kind: 'reminder', conv, owner, runAt: at, payload: { language, deadlineId: d.id, text: say(language, `${d.name} expires in ${lead} day${lead === 1 ? '' : 's'} (${d.due_date}). Renew it before then.`, `${d.name} بينتهي بعد ${lead} يوم (${d.due_date}). جدده قبل.`) } });
+        insertTask({ kind: 'reminder', conv, owner, runAt: at, payload: { language, deadlineId: d.id, text: say(language, `${d.name} expires in ${lead} day${lead === 1 ? '' : 's'} (${d.due_date}). Renew it before then.`, `${d.name} بينتهي بعد ${arDays(lead)} (${d.due_date}). جدده قبل.`) } });
         set++;
       }
     }
