@@ -176,3 +176,16 @@ test('app: approvals list what waits for the owner; approve with an edit, or rej
   assert.ok(sent.slice(n).some((s) => /Cancelled from the app/.test(s.text)));
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('app: an owner WhatsApp knows by a private id (@lid) keeps one chat with the app', async () => {
+  mods.settings.setSetting('assistant', mods.assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', owners: [{ name: 'Hisham', phone: '+963944111222' }] }));
+  const lid = mods.inbox.ensureConversation({ channel: 'whatsapp', externalId: '555000111222333@lid', name: 'Hisham', handle: '+963944111222', meta: { phone: '+963944111222' } });
+  const r = await call('GET', '/app/chat');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.conversationId, lid);
+  // What the owner says in the app lands in that same chat.
+  await call('POST', '/app/say', { text: 'hi again' });
+  const last = mods.db.prepare("SELECT conversation_id FROM messages WHERE direction = 'in' ORDER BY id DESC LIMIT 1").get();
+  assert.equal(last.conversation_id, lid);
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

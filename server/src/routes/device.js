@@ -35,9 +35,17 @@ function ownerFor(req) {
 }
 
 // The owner's assistant chat: the same WhatsApp conversation their own messages to the bot arrive in.
+// WhatsApp may know them by a private id (…@lid) instead of their number, so an existing chat with
+// their phone is used first; only without one is a chat keyed by the number made.
 function ownerIdentity(owner) {
   const digits = digitsOf(owner.phone);
-  return { channel: 'whatsapp', externalId: `${digits}@s.whatsapp.net`, handle: `+${digits}`, name: owner.name || null, convMeta: { phone: `+${digits}` } };
+  // WhatsApp's own id for them (…@lid), where their real WhatsApp messages arrive, wins.
+  const existing = db
+    .prepare("SELECT external_id, meta FROM conversations WHERE channel = 'whatsapp' AND external_id NOT LIKE '%@g.us' AND external_id NOT LIKE '%@s.whatsapp.net' ORDER BY id")
+    .all()
+    .find((c) => samePhone(JSON.parse(c.meta || '{}').phone, digits));
+  const externalId = existing?.external_id || `${digits}@s.whatsapp.net`;
+  return { channel: 'whatsapp', externalId, handle: `+${digits}`, name: owner.name || null, convMeta: { phone: `+${digits}` } };
 }
 
 function ownerConversation(owner) {
@@ -167,7 +175,7 @@ device.get('/feed', (req, res) => {
     return res.json({ messages: [], last: db.prepare('SELECT MAX(id) AS id FROM messages').get().id || 0 });
   }
   const after = Number(req.query.after) || 0;
-  const ids = owners().map((o) => db.prepare('SELECT id FROM conversations WHERE channel = ? AND external_id = ?').get('whatsapp', `${digitsOf(o.phone)}@s.whatsapp.net`)?.id).filter(Boolean);
+  const ids = owners().map((o) => db.prepare('SELECT id FROM conversations WHERE channel = ? AND external_id = ?').get('whatsapp', ownerIdentity(o).externalId)?.id).filter(Boolean);
   const rows = ids.length
     ? db.prepare(`SELECT id, conversation_id, text, meta, created_at FROM messages
         WHERE direction = 'out' AND id > ? AND conversation_id IN (${ids.map(() => '?').join(',')}) ORDER BY id LIMIT 50`).all(after, ...ids)
