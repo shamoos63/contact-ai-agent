@@ -126,14 +126,64 @@ class Api {
     if (set == null) throw ApiError('The agent did not start a session');
     cookie = set.split(';').first;
     await _save();
+    await _remember(base);
   }
 
+  /// Signs out at once: the session is forgotten on the phone first; telling the agent happens in
+  /// the background and never waits more than a few seconds (it may be unreachable).
   Future<void> signOut() async {
-    try {
-      await post('/logout');
-    } catch (_) {}
+    final old = cookie;
     cookie = null;
     await _save();
+    if (old != null && base.isNotEmpty) {
+      http.post(_u('/logout'), headers: {'Cookie': old}).timeout(const Duration(seconds: 3)).then((_) {}, onError: (_) {});
+    }
+  }
+
+  // --- The agent's address ---
+
+  /// Up to 3 addresses that worked before, newest first.
+  Future<List<String>> recentServers() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getStringList('recent_servers') ?? (base.isEmpty ? [] : [base]);
+  }
+
+  Future<void> _remember(String server) async {
+    final p = await SharedPreferences.getInstance();
+    final list = [server, ...(p.getStringList('recent_servers') ?? []).where((s) => s != server)].take(3).toList();
+    await p.setStringList('recent_servers', list);
+  }
+
+  /// Tries an address with this phone's sign-in: 'ok' (reachable and signed in), 'signin' (reachable,
+  /// but this sign-in isn't valid there). Throws ApiError with a plain reason when it can't be reached.
+  Future<String> checkServer(String server) async {
+    final url = normalizeServer(server);
+    try {
+      final h = await http.get(Uri.parse('$url/health')).timeout(const Duration(seconds: 5));
+      if (h.statusCode != 200) throw ApiError('$url answered, but it isn\'t the agent dashboard.');
+      final me = await http.get(Uri.parse('$url/api/me'), headers: authHeaders).timeout(const Duration(seconds: 5));
+      return me.statusCode == 200 ? 'ok' : 'signin';
+    } on ApiError {
+      rethrow;
+    } catch (_) {
+      throw ApiError("Can't reach $url. Check the address, that the computer is on, and that the phone is on the same Wi-Fi (a VPN can block it).");
+    }
+  }
+
+  /// Use another address from now on (after checkServer said 'ok').
+  Future<void> switchServer(String server) async {
+    base = normalizeServer(server);
+    await _save();
+    await _remember(base);
+  }
+
+  /// Point at an address where the user has to sign in again (keeps the address, forgets the session).
+  Future<void> useServerAndSignOut(String server) async {
+    final old = cookie;
+    base = normalizeServer(server);
+    cookie = null;
+    await _save();
+    if (old != null) http.post(_u('/logout'), headers: {'Cookie': old}).timeout(const Duration(seconds: 3)).then((_) {}, onError: (_) {});
   }
 
   Future<OwnersInfo> owners() async {

@@ -47,6 +47,9 @@ class Native {
       _ch.invokeMethod('wakeStart', {'name': name, 'speak': speak, 'onlyCharging': onlyCharging});
   static Future<void> wakeStop() => _ch.invokeMethod('wakeStop');
 
+  /// Whether the phone's traffic goes through a VPN right now (it can block the local network).
+  static Future<bool> vpnActive() async => await _ch.invokeMethod<bool>('vpnActive') ?? false;
+
   /// The floating assistant panel (over other apps) while "Hey …" works.
   static Future<void> setOverlay(bool on) => _ch.invokeMethod('setOverlay', {'on': on});
   static Future<void> openOverlaySettings() => _ch.invokeMethod('openOverlaySettings');

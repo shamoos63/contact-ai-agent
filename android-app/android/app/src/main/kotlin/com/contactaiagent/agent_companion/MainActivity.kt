@@ -96,6 +96,11 @@ class MainActivity : FlutterActivity() {
                 WakeWordService.start(this)
                 result.success(null)
             }
+            "vpnActive" -> {
+                val cm = getSystemService(android.net.ConnectivityManager::class.java)
+                val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+                result.success(caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true)
+            }
             "wakeStop" -> {
                 WakeWordService.configure(this, false, WakeWordService.config(this).name, WakeWordService.config(this).speak, WakeWordService.config(this).onlyCharging)
                 WakeWordService.stop(this)

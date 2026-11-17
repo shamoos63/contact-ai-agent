@@ -7,6 +7,7 @@ import '../native.dart';
 import '../theme.dart';
 import '../widgets/bubble.dart';
 import '../widgets/orb.dart';
+import 'settings.dart';
 
 /// Talk to your agent: type, hold the mic, or send a photo. Drafts, reminders, alerts and questions
 /// from the agent arrive here too (the same chat as your WhatsApp messages to it).
@@ -240,6 +241,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       bottom: false,
       child: Column(children: [
         _header(compact: !empty),
+        if (_offline) _offlineBanner(),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
@@ -257,7 +259,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
         ),
         if (_awaitingAnswer && !_waiting) _answerChips(),
         _composer(),
-        const SizedBox(height: 76),
+        SizedBox(height: bottomGap(context)),
       ]),
     );
   }
@@ -292,6 +294,35 @@ class _AssistantScreenState extends State<AssistantScreen> {
             ]),
     );
   }
+
+  // Can't reach the agent: offer another address (Wi-Fi changed, VPN on, computer's address changed).
+  Widget _offlineBanner() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: Glass(
+          glow: AppColors.amber,
+          padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+          child: Row(children: [
+            const Icon(Icons.wifi_off_rounded, color: AppColors.amber),
+            const SizedBox(width: 10),
+            Expanded(child: Text("Can't reach your agent at ${_api.base}", style: const TextStyle(fontSize: 13))),
+            TextButton(
+              onPressed: () async {
+                final r = await showAddressDialog(context);
+                if (r == 'signin') return widget.onSignedOut();
+                if (r != 'switched') return;
+                // Restart the background connection and "Hey …" on the new address right away.
+                final prefs = await AppPrefs.load();
+                if (prefs.background && _api.cookie != null) {
+                  await Native.startService(server: _api.base, cookie: _api.cookie!, owner: _api.ownerPhone, missedCalls: prefs.missedCalls, callNotes: prefs.callNotes);
+                }
+                if (prefs.wake) await prefs.applyWake();
+                _refresh(first: true);
+              },
+              child: const Text('Change address'),
+            ),
+          ]),
+        ),
+      );
 
   Widget _emptyState() {
     const ideas = [

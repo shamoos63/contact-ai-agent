@@ -28,8 +28,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
+import android.media.AudioFormat
+import android.media.AudioRecord
+import java.time.LocalDate
 import java.io.DataOutputStream
 import java.io.File
 import java.net.HttpURLConnection
@@ -43,11 +44,12 @@ import java.util.zip.ZipInputStream
  * Then it beeps, records the command until you stop talking, sends it to the agent as a voice note,
  * and plays the agent's spoken reply.
  */
-class WakeWordService : Service(), RecognitionListener {
+class WakeWordService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var model: Model? = null
-    private var speech: SpeechService? = null
+    @Volatile private var hearing: Thread? = null // our own listening loop (instead of Vosk's, which crashes on mic errors)
+    private var lastTrigger = 0L
     private var recorder: MediaRecorder? = null
     private var player: MediaPlayer? = null
     private var stopped = false
@@ -70,7 +72,7 @@ class WakeWordService : Service(), RecognitionListener {
     private fun speakAgain() {
         if (busy) return
         busy = true
-        speech?.stop(); speech?.shutdown(); speech = null
+        stopHearing()
         main.postDelayed({ command() }, 150)
     }
 
@@ -96,8 +98,7 @@ class WakeWordService : Service(), RecognitionListener {
         overlay?.hide()
         stopped = true
         running = false
-        speech?.shutdown()
-        speech = null
+        stopHearing()
         try { recorder?.release() } catch (_: Exception) {}
         player?.release()
         model?.close()
@@ -210,39 +211,102 @@ class WakeWordService : Service(), RecognitionListener {
             main.postDelayed({ listen() }, 60_000)
             return
         }
+        stopHearing()
+        val phrase = phrase()
+        val t = Thread({ hear(m, phrase) }, "wake-hear")
+        hearing = t
+        t.start()
+        setStatus("listening", phrase)
+        update("Listening for \"${cfg().name}\"")
+    }
+
+    private fun stopHearing() {
+        val t = hearing ?: return
+        hearing = null
+        t.interrupt()
+        try { t.join(1500) } catch (_: InterruptedException) {}
+    }
+
+    /**
+     * Reads the microphone and feeds the recognizer. A trigger needs ALL of:
+     * - the recognizer's FINAL result (end of an utterance), never a partial guess: with a one-phrase
+     *   grammar, partial results often "hear" the phrase in plain noise;
+     * - exactly the wake phrase, every word with confidence >= MIN_CONF ("[unk]" is rejected);
+     * - real sound in that utterance (not near-silence);
+     * - at least COOLDOWN_MS since the last trigger.
+     * Mic errors (the mic taken by a call or another app) pause and retry; they never crash the app.
+     */
+    private fun hear(model: Model, phrase: String) {
+        val me = Thread.currentThread()
+        var rec: Recognizer? = null
+        var mic: AudioRecord? = null
         try {
-            // Only the wake phrase (and "unknown") can be recognised: few false alarms, little CPU.
-            val grammar = JSONArray().put(phrase()).put("[unk]").toString()
-            val rec = Recognizer(m, 16000f, grammar)
-            speech = SpeechService(rec, 16000f).also { it.startListening(this) }
-            setStatus("listening", phrase())
-            update("Listening for \"${cfg().name}\"")
+            val grammar = JSONArray().put(phrase).put("[unk]").toString()
+            rec = Recognizer(model, 16000f, grammar).apply { setWords(true) }
+            val size = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT).coerceAtLeast(8192)
+            @Suppress("MissingPermission")
+            mic = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size * 2)
+            if (mic.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("the microphone is busy")
+            mic.startRecording()
+            val buf = ShortArray(size / 2)
+            var peak = 0
+            while (hearing === me && !me.isInterrupted && !stopped) {
+                val n = mic.read(buf, 0, buf.size)
+                if (n < 0) throw IllegalStateException("microphone read error $n")
+                if (n == 0) continue
+                for (i in 0 until n) { val v = kotlin.math.abs(buf[i].toInt()); if (v > peak) peak = v }
+                if (!rec.acceptWaveForm(buf, n)) continue
+                // End of an utterance: the final result for it.
+                val result = rec.result
+                val loud = peak
+                peak = 0
+                val why = wakeReason(result, phrase, loud) ?: continue
+                if (System.currentTimeMillis() - lastTrigger < COOLDOWN_MS) continue
+                lastTrigger = System.currentTimeMillis()
+                countTrigger(why)
+                main.post { triggered() }
+                return
+            }
         } catch (e: Throwable) {
-            Log.w(TAG, "listen: ${e.message}")
-            setStatus("error", e.message)
-            main.postDelayed({ listen() }, 10_000)
+            if (hearing === me && !stopped) {
+                Log.w(TAG, "hear: ${e.message}")
+                main.postDelayed({ if (hearing === me || hearing == null) { hearing = null; listen() } }, 5000)
+            }
+        } finally {
+            try { mic?.stop() } catch (_: Throwable) {}
+            try { mic?.release() } catch (_: Throwable) {}
+            try { rec?.close() } catch (_: Throwable) {}
         }
     }
 
-    private fun heard(text: String?) {
-        val t = text?.let { runCatching { JSONObject(it).optString("partial", JSONObject(it).optString("text")) }.getOrNull() } ?: return
-        if (busy || !t.contains(phrase())) return
+    /** Why this final result is the wake phrase, or null if it isn't (good enough). */
+    private fun wakeReason(json: String, phrase: String, peak: Int): String? {
+        val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        val text = o.optString("text").trim()
+        if (text != phrase) return null
+        val words = o.optJSONArray("result") ?: return null
+        if (words.length() != phrase.split(' ').size) return null
+        val confs = (0 until words.length()).map { words.getJSONObject(it).optDouble("conf", 0.0) }
+        if (confs.any { it < MIN_CONF }) return null
+        if (peak < MIN_PEAK) return null
+        return "\"$text\" (confidence ${confs.joinToString("/") { "%.2f".format(it) }}, level $peak)"
+    }
+
+    private fun triggered() {
+        if (busy || stopped) return
         busy = true
-        speech?.stop()
-        speech?.shutdown()
-        speech = null
+        stopHearing()
         main.postDelayed({ command() }, 150)
     }
 
-    override fun onPartialResult(hypothesis: String?) = heard(hypothesis)
-    override fun onResult(hypothesis: String?) = heard(hypothesis)
-    override fun onFinalResult(hypothesis: String?) = heard(hypothesis)
-    override fun onError(exception: Exception?) {
-        Log.w(TAG, "vosk: ${exception?.message}")
-        speech?.shutdown(); speech = null
-        main.postDelayed({ listen() }, 3000)
+    private fun countTrigger(why: String) {
+        val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val today = LocalDate.now().toString()
+        val n = if (p.getString("trigger_day", null) == today) p.getInt("trigger_count", 0) + 1 else 1
+        p.edit().putString("trigger_day", today).putInt("trigger_count", n).putString("trigger_last", why)
+            .putLong("trigger_at", System.currentTimeMillis()).apply()
+        Log.i(TAG, "wake: $why")
     }
-    override fun onTimeout() { speech?.shutdown(); speech = null; listen() }
 
     // --- The command ---
 
@@ -270,12 +334,13 @@ class WakeWordService : Service(), RecognitionListener {
         recorder = r
         val started = System.currentTimeMillis()
         var spoke = false
+        var speechTicks = 0 // 100 ms ticks above the speech level
         var quietSince = started
         val tick = object : Runnable {
             override fun run() {
                 val level = try { r.maxAmplitude } catch (_: Exception) { 0 }
                 val now = System.currentTimeMillis()
-                if (level > SPEECH_LEVEL) { spoke = true; quietSince = now }
+                if (level > SPEECH_LEVEL) { speechTicks++; quietSince = now; if (speechTicks >= MIN_SPEECH_TICKS) spoke = true }
                 overlay?.level((level / 12000f).coerceIn(0f, 1f))
                 val silentFor = now - quietSince
                 val elapsed = now - started
@@ -285,7 +350,8 @@ class WakeWordService : Service(), RecognitionListener {
                     r.release()
                     recorder = null
                     beep(ToneGenerator.TONE_PROP_ACK)
-                    if (!spoke) { file.delete(); panel("done", "I didn't hear anything."); done(null); return }
+                    // Only real speech is sent: a cough, a door or a TV blip after the beep isn't.
+                    if (!spoke) { file.delete(); Log.i(TAG, "not sent: only ${speechTicks * 100} ms of speech"); panel("done", "I didn't hear a command."); done(null); return }
                     val seconds = ((now - started) / 1000).toInt().coerceAtLeast(1)
                     io.execute { send(file, seconds) }
                 } else main.postDelayed(this, 100)
@@ -466,6 +532,10 @@ class WakeWordService : Service(), RecognitionListener {
         private const val MODEL_DIR = "vosk-en"
         private const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
         private const val SPEECH_LEVEL = 2500
+        private const val MIN_SPEECH_TICKS = 8 // 0.8 s of speech after the beep, or nothing is sent
+        private const val MIN_CONF = 0.85 // each word of the wake phrase
+        private const val MIN_PEAK = 3000 // the utterance must be actually loud, not near-silence
+        private const val COOLDOWN_MS = 5000L
 
         @Volatile var running = false
 
@@ -492,7 +562,13 @@ class WakeWordService : Service(), RecognitionListener {
             val last = p.getString("state", null)
             // After a failure the service stops, but the reason stays visible until it is turned on again.
             val state = if (running) last ?: "starting" else if (last == "error") "error" else "off"
-            return mapOf("running" to running, "state" to state, "detail" to p.getString("detail", null), "enabled" to enabled(ctx))
+            val today = LocalDate.now().toString() == p.getString("trigger_day", null)
+            return mapOf(
+                "running" to running, "state" to state, "detail" to p.getString("detail", null), "enabled" to enabled(ctx),
+                "triggersToday" to (if (today) p.getInt("trigger_count", 0) else 0),
+                "lastTrigger" to p.getString("trigger_last", null),
+                "lastTriggerAt" to p.getLong("trigger_at", 0L),
+            )
         }
 
         fun start(ctx: Context) {

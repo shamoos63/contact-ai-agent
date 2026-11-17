@@ -92,7 +92,7 @@ class _InboxScreenState extends State<InboxScreen> {
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 90),
+                    padding: EdgeInsets.fromLTRB(12, 4, 12, bottomGap(context) + 8),
                     itemCount: items.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (_, i) => _tile(items[i]),
