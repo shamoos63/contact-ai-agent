@@ -1309,6 +1309,29 @@ test('drafts: new topics wait for the owner, their edits teach the style, approv
   assert.equal(toCustomer().length, n);
   assert.match(toOwner().at(-1), /didn't send it/);
 
+  // A correction of the draft ("her name is…, tell her…") fixes the draft and shows it again: nothing
+  // goes to anyone else. "Save this" then remembers the fact as a rule, and the draft comes back.
+  mods.inbox.handleIncoming({ ...customer, text: 'Who is here?', messageId: 'dr11' });
+  await wait();
+  const draftNow = assistant.listDrafts()[0];
+  const sentBefore = sent.length;
+  assistantAnswers.push({ action: 'send_message', to: 'my wife', text: 'Hello Reem' });
+  mods.inbox.handleIncoming({ ...owner, text: 'her name is Reem not Rima, tell her hello Reem', messageId: 'dr12' });
+  await wait();
+  assert.ok(!sent.slice(sentBefore).some((m) => m.to !== ownerJid));
+  assert.match(mods.db.prepare('SELECT text FROM drafts WHERE id = ?').get(draftNow.id).text, /\(her name is Reem not Rima, tell her hello Reem\)$/);
+  assert.match(toOwner().at(-1), /^✍️ Draft reply/);
+  assistantAnswers.push({ action: 'learn', text: 'this' });
+  mods.inbox.handleIncoming({ ...owner, text: 'save this info', messageId: 'dr13' });
+  await wait();
+  assert.match(toOwner().at(-1), /I'll remember this for future answers:\nReem is H's wife/);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'dr14' });
+  await wait();
+  assert.ok(mods.db.prepare("SELECT 1 FROM skills WHERE kind = 'rule' AND text LIKE 'Reem is%'").get());
+  assert.ok(toOwner().slice(-2).some((t) => /^✍️ Draft reply/.test(t)));
+  mods.inbox.handleIncoming({ ...owner, text: 'no', messageId: 'dr15' });
+  await wait();
+
   mods.settings.setSetting('drafts', { enabled: false, approvals: 3, hold_message: true });
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
