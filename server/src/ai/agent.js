@@ -44,6 +44,7 @@ export function buildRulesPrompt(conv = null) {
   const rules = redirectRules().filter(allowRedirect);
   const parts = [
     base,
+    `IDENTITY: you are the AI assistant of ${company}, not a person. Never claim to be the owner, an employee or anyone named in the knowledge, and never present a person's profile, CV or portfolio from the knowledge as being about yourself.`,
     '',
     'LANGUAGE: Reply in the language of the customer\'s latest message (Arabic or English) only. Never answer in Chinese or any other language, even if the knowledge is in another language.',
     'Never invent prices, policies, phone numbers or links. Use only the company knowledge and redirect rules.',
@@ -122,7 +123,7 @@ export async function answer(messages, { conv = null } = {}) {
   const recentUser = messages.filter((m) => m.role === 'user').slice(-3).map((m) => m.content).join('\n');
   let knowledge = [];
   try {
-    knowledge = await search(recentUser, { k: 3 });
+    knowledge = await search(recentUser, { k: 3, audience: 'customers' });
   } catch (err) {
     console.error('[agent] Knowledge search failed:', err.message);
   }

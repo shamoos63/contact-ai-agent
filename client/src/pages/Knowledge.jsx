@@ -69,7 +69,7 @@ export default function Knowledge() {
           {sources.map((s) => (
             <tr key={s.id}>
               <td dir="auto">
-                <strong>{s.title}</strong>
+                <strong>{s.title}</strong>{s.audience === 'owner' && <> <Pill tone="muted" title="Customers never get answers from this">🔒 Owner only</Pill></>}
                 {s.origin && s.type === 'url' && <div className="small"><a href={s.origin} target="_blank" rel="noreferrer">{s.origin}</a></div>}
               </td>
               <td><span className="tag-soft">{s.type}</span>{s.size > 0 && <div className="small muted">{formatBytes(s.size)} of text</div>}</td>
@@ -81,6 +81,7 @@ export default function Knowledge() {
               <td className="small muted">{formatTime(s.created_at)}</td>
               <td className="row">
                 <button onClick={() => edit(s)}>Edit</button>
+                <button title={s.audience === 'owner' ? 'Let customers get answers from this again' : 'Keep this away from customers (e.g. your CV or private notes)'} onClick={() => api(`/kb/${s.id}/audience`, { method: 'PUT', body: { audience: s.audience === 'owner' ? 'all' : 'owner' } }).then(load)}>{s.audience === 'owner' ? 'Share with customers' : 'Owner only'}</button>
                 {s.type === 'url' && <button onClick={() => refresh(s)}>Refresh</button>}
                 <button className="danger" onClick={() => remove(s)}>Delete</button>
               </td>

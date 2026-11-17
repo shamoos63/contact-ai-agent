@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, Browsers, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { DATA_DIR } from '../config.js';
 import { getSetting } from '../settings.js';
+import { forChat } from './format.js';
 import { handleIncoming, registerSender, registerVoiceSender, registerImageSender, registerPresence } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 import { isTeamNumber, registerWhatsAppSender } from '../handoff.js';
@@ -220,7 +221,7 @@ export async function sendWhatsAppTo(phone, text) {
   if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
   const digits = String(phone).replace(/\D/g, '');
   if (digits.length < 7) throw new Error(`"${phone}" is not a valid phone number`);
-  await sock.sendMessage(`${digits}@s.whatsapp.net`, { text });
+  await sock.sendMessage(`${digits}@s.whatsapp.net`, { text: forChat(text, 'whatsapp') });
 }
 
 export function whatsappConnected() {
@@ -251,7 +252,7 @@ export async function logoutWhatsApp() {
 
 registerSender('whatsapp', async (conv, text) => {
   if (!sock || state.status !== 'connected') throw new Error('WhatsApp is not connected');
-  const sent = await sock.sendMessage(conv.external_id, { text });
+  const sent = await sock.sendMessage(conv.external_id, { text: forChat(text, 'whatsapp') });
   return { externalId: sent?.key?.id };
 });
 

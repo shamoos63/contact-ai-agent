@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { getSetting } from '../settings.js';
+import { forChat } from './format.js';
 import { handleIncoming, registerSender, registerVoiceSender, registerImageSender, registerPresence } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 
@@ -89,7 +90,7 @@ export async function stopTelegram() {
 
 registerSender('telegram', async (conv, text) => {
   if (!bot) throw new Error('Telegram bot is not running');
-  const sent = await bot.api.sendMessage(conv.external_id, text);
+  const sent = await bot.api.sendMessage(conv.external_id, forChat(text, 'telegram'));
   return { externalId: `${conv.external_id}:${sent.message_id}` };
 });
 

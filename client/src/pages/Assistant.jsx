@@ -228,6 +228,11 @@ export default function Assistant() {
                 {zones.map((z) => <option key={z}>{z}</option>)}
               </select>
             </label>
+            <label>
+              Country of the business
+              <input value={a.country || ''} placeholder="e.g. United Arab Emirates" onChange={(e) => setA({ ...a, country: e.target.value })} />
+              <small className="muted">Used for prices and local answers when searching online. Empty: taken from the first owner's phone code.</small>
+            </label>
             <label>Remind me before appointments (minutes)<input type="number" min="0" value={a.event_reminder_minutes} onChange={(e) => setA({ ...a, event_reminder_minutes: e.target.value })} /></label>
             <label>
               Daily summary at (optional)
