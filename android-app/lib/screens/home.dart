@@ -54,7 +54,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final api = Api.instance;
     final prefs = await AppPrefs.load();
     // The wake phrase needs the app open to start the microphone service (Android's rule).
-    if (prefs.wake) await prefs.applyWake();
+    if (prefs.wake) {
+      // If "Hey …" failed to start last time, it was switched off on the phone: keep it off (the
+      // reason shows in Settings) instead of trying again on every launch.
+      final w = await Native.wakeStatus();
+      if (w['state'] == 'error' && w['enabled'] == false) {
+        prefs.wake = false;
+        await prefs.save();
+      } else {
+        await prefs.applyWake();
+      }
+    }
     if (!prefs.background) return;
     await Native.requestPermissions(['notifications', if (prefs.missedCalls || prefs.callNotes) 'phone']);
     await Native.startService(server: api.base, cookie: api.cookie!, owner: api.ownerPhone, missedCalls: prefs.missedCalls, callNotes: prefs.callNotes);
