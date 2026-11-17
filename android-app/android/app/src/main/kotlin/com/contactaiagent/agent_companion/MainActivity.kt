@@ -101,7 +101,15 @@ class MainActivity : FlutterActivity() {
                 WakeWordService.stop(this)
                 result.success(null)
             }
-            "wakeStatus" -> result.success(WakeWordService.status(this))
+            "wakeStatus" -> result.success(WakeWordService.status(this) + mapOf(
+                "overlay" to WakeWordService.config(this).overlay,
+                "overlayAllowed" to android.provider.Settings.canDrawOverlays(this),
+            ))
+            "setOverlay" -> { WakeWordService.setOverlay(this, call.argument<Boolean>("on") != false); result.success(null) }
+            "openOverlaySettings" -> {
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                result.success(null)
+            }
             "recentCalls" -> result.success(recentCalls())
             "pendingCallNote" -> { result.success(pendingCallNote); pendingCallNote = null }
             "pendingOpen" -> { result.success(pendingOpen); pendingOpen = null }

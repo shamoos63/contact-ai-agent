@@ -231,7 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
         const SizedBox(height: 18),
-        const Center(child: Text('Agent companion · v0.4.2', style: TextStyle(color: AppColors.muted, fontSize: 12))),
+        const Center(child: Text('Agent companion · v0.4.3', style: TextStyle(color: AppColors.muted, fontSize: 12))),
       ]),
     );
   }
@@ -268,6 +268,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
         ),
+        SwitchListTile(
+          value: _wake['overlay'] != false,
+          onChanged: (v) async {
+            await Native.setOverlay(v);
+            final w = await Native.wakeStatus();
+            if (mounted) setState(() => _wake = w);
+          },
+          title: const Text('Show floating assistant'),
+          subtitle: const Text('A panel at the bottom of the screen shows what it heard and its answer, over any app',
+              style: TextStyle(color: AppColors.muted)),
+          secondary: const Icon(Icons.picture_in_picture_alt_rounded, color: AppColors.cyan),
+        ),
+        if (_wake['overlay'] != false)
+          ListTile(
+            leading: Icon(
+              _wake['overlayAllowed'] == true ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+              color: _wake['overlayAllowed'] == true ? AppColors.green : AppColors.amber,
+            ),
+            title: const Text('Display over other apps'),
+            subtitle: Text(
+              _wake['overlayAllowed'] == true ? 'Allowed' : 'Not allowed yet: the panel can\'t show (notifications still work)',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            trailing: _wake['overlayAllowed'] == true ? null : TextButton(onPressed: Native.openOverlaySettings, child: const Text('Allow')),
+          ),
         SwitchListTile(
           value: p.wakeSpeak,
           onChanged: (v) => _setWake((x) => x.wakeSpeak = v),

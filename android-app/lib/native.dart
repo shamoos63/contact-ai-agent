@@ -46,6 +46,10 @@ class Native {
   static Future<void> wakeStart({required String name, required bool speak, required bool onlyCharging}) =>
       _ch.invokeMethod('wakeStart', {'name': name, 'speak': speak, 'onlyCharging': onlyCharging});
   static Future<void> wakeStop() => _ch.invokeMethod('wakeStop');
+
+  /// The floating assistant panel (over other apps) while "Hey …" works.
+  static Future<void> setOverlay(bool on) => _ch.invokeMethod('setOverlay', {'on': on});
+  static Future<void> openOverlaySettings() => _ch.invokeMethod('openOverlaySettings');
   static Future<Map<String, dynamic>> wakeStatus() async =>
       (await _ch.invokeMapMethod<String, dynamic>('wakeStatus')) ?? {'state': 'off'};
 

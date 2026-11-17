@@ -52,6 +52,27 @@ class WakeWordService : Service(), RecognitionListener {
     private var player: MediaPlayer? = null
     private var stopped = false
     private var busy = false
+    private var overlay: WakeOverlay? = null
+    private var lastReply = ""
+
+    // The floating panel (if allowed and switched on); all calls are on the main thread.
+    private fun panel(state: String, text: String? = null) = main.post {
+        if (!cfg().overlay) return@post
+        try {
+            val o = overlay ?: WakeOverlay(this) { speakAgain() }.also { overlay = it }
+            o.show(state, text)
+        } catch (e: Throwable) {
+            Log.w(TAG, "overlay: ${e.message}") // without the permission: just the notification
+        }
+    }
+
+    // The panel's mic button: a new command without the wake word.
+    private fun speakAgain() {
+        if (busy) return
+        busy = true
+        speech?.stop(); speech?.shutdown(); speech = null
+        main.postDelayed({ command() }, 150)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,9 +86,14 @@ class WakeWordService : Service(), RecognitionListener {
         io.execute { prepare() }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // "Speak now" without the wake word (the panel's mic button, a shortcut, or a test over USB).
+        if (intent?.action == ACTION_SPEAK) main.postDelayed({ if (model != null) speakAgain() }, 300)
+        return START_STICKY
+    }
 
     override fun onDestroy() {
+        overlay?.hide()
         stopped = true
         running = false
         speech?.shutdown()
@@ -221,6 +247,7 @@ class WakeWordService : Service(), RecognitionListener {
     // --- The command ---
 
     private fun command() {
+        panel("listening", "")
         beep(ToneGenerator.TONE_PROP_BEEP)
         vibrate()
         setStatus("recording", null)
@@ -249,6 +276,7 @@ class WakeWordService : Service(), RecognitionListener {
                 val level = try { r.maxAmplitude } catch (_: Exception) { 0 }
                 val now = System.currentTimeMillis()
                 if (level > SPEECH_LEVEL) { spoke = true; quietSince = now }
+                overlay?.level((level / 12000f).coerceIn(0f, 1f))
                 val silentFor = now - quietSince
                 val elapsed = now - started
                 // Stop after a pause once you've spoken, after 6 s of nothing, or after 20 s in all.
@@ -257,7 +285,7 @@ class WakeWordService : Service(), RecognitionListener {
                     r.release()
                     recorder = null
                     beep(ToneGenerator.TONE_PROP_ACK)
-                    if (!spoke) { file.delete(); done(null); return }
+                    if (!spoke) { file.delete(); panel("done", "I didn't hear anything."); done(null); return }
                     val seconds = ((now - started) / 1000).toInt().coerceAtLeast(1)
                     io.execute { send(file, seconds) }
                 } else main.postDelayed(this, 100)
@@ -270,27 +298,46 @@ class WakeWordService : Service(), RecognitionListener {
         val c = AgentService.config(this) ?: return done("Sign in to the app first")
         setStatus("thinking", null)
         update("Thinking…")
+        panel("thinking", "")
         try {
             val before = lastMessageId(c)
             upload(c, file, seconds)
             file.delete()
             // Wait for the agent's answer (voice notes are transcribed first, so give it time).
+            var heardShown = false
             val end = System.currentTimeMillis() + 120_000
             while (System.currentTimeMillis() < end && !stopped) {
-                Thread.sleep(2500)
+                Thread.sleep(1500)
+                // What it understood (the transcription of the voice note), as soon as it's ready.
+                if (!heardShown) heardText(c, before)?.let { heardShown = true; panel("thinking", "“$it”") }
                 val reply = replyAfter(c, before) ?: continue
                 val audio = reply.optJSONObject("meta")?.optString("audio")?.takeIf { it.isNotBlank() }
                 val text = reply.optString("text")
+                lastReply = text
+                panel(if (cfg().speak && audio != null) "speaking" else "done", text)
                 // The background connection already shows the agent's messages; only notify without it.
                 if (!AgentService.running) notifyReply(text)
                 if (cfg().speak && audio != null) play("${c.server}/api/media/${Uri.encode(audio)}", c.cookie) else done(null)
                 return
             }
             done("No answer yet. It will show in the app.")
+            panel("error", "No answer yet. It will show in the app.")
         } catch (e: Exception) {
             Log.w(TAG, "send: ${e.message}")
             done("Couldn't reach the agent: ${e.message}")
+            panel("error", "Couldn't reach the agent. Is the computer on and the phone on the same network?")
         }
+    }
+
+    // The owner's own message after `after`: the transcribed voice note.
+    private fun heardText(c: AgentService.Companion.Config, after: Long): String? {
+        val a = messages(c, after) ?: return null
+        for (i in 0 until a.length()) {
+            val m = a.getJSONObject(i)
+            val t = m.optString("text")
+            if (m.optString("direction") == "in" && t.isNotBlank() && !t.startsWith("🎤")) return t
+        }
+        return null
     }
 
     private fun ownerQuery(c: AgentService.Companion.Config) = c.owner?.let { "&owner=${Uri.encode(it)}" } ?: ""
@@ -349,7 +396,7 @@ class WakeWordService : Service(), RecognitionListener {
             try {
                 p.setDataSource(this, Uri.parse(url), mapOf("Cookie" to cookie))
                 p.setOnPreparedListener { it.start() }
-                p.setOnCompletionListener { it.release(); player = null; done(null) }
+                p.setOnCompletionListener { it.release(); player = null; panel("done", lastReply); done(null) }
                 p.setOnErrorListener { mp, _, _ -> mp.release(); player = null; done(null); true }
                 p.prepareAsync()
             } catch (e: Exception) {
@@ -410,6 +457,7 @@ class WakeWordService : Service(), RecognitionListener {
 
     companion object {
         private const val TAG = "WakeWord"
+        const val ACTION_SPEAK = "com.contactaiagent.agent_companion.SPEAK"
         private const val CHANNEL = "agent_wake"
         private const val AGENT_CHANNEL = "agent_messages"
         private const val ID = 5
@@ -421,7 +469,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         @Volatile var running = false
 
-        data class WakeConfig(val name: String, val speak: Boolean, val onlyCharging: Boolean)
+        data class WakeConfig(val name: String, val speak: Boolean, val onlyCharging: Boolean, val overlay: Boolean = true)
 
         fun configure(ctx: Context, enabled: Boolean, name: String, speak: Boolean, onlyCharging: Boolean) {
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -431,8 +479,11 @@ class WakeWordService : Service(), RecognitionListener {
 
         fun config(ctx: Context): WakeConfig {
             val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            return WakeConfig(p.getString("name", "Jarvis") ?: "Jarvis", p.getBoolean("speak", true), p.getBoolean("onlyCharging", false))
+            return WakeConfig(p.getString("name", "Jarvis") ?: "Jarvis", p.getBoolean("speak", true), p.getBoolean("onlyCharging", false), p.getBoolean("overlay", true))
         }
+
+        /** "Show floating assistant": the panel over other apps (needs "Display over other apps"). */
+        fun setOverlay(ctx: Context, on: Boolean) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("overlay", on).apply()
 
         fun enabled(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
 
