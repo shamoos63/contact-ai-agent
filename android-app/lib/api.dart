@@ -186,6 +186,15 @@ class Api {
   Future<void> callNote(String number, String text, {String? name}) =>
       post('/app/call-note', {'number': number, 'text': text, if (name != null) 'name': name});
 
+  /// Everything waiting for the owner's OK.
+  Future<List<Map<String, dynamic>>> approvals() async {
+    final r = await get('/app/approvals') as Map;
+    return ((r['items'] as List?) ?? []).map((e) => (e as Map).cast<String, dynamic>()).toList();
+  }
+
+  Future<Map<String, dynamic>> decide(String id, {required bool approve, String? text}) async =>
+      ((await post('/app/approvals/${Uri.encodeComponent(id)}', {'approve': approve, if (text != null) 'text': text})) as Map).cast<String, dynamic>();
+
   Future<Map<String, dynamic>> stats() async => (await get('/stats') as Map).cast<String, dynamic>();
 
   String media(String file) => '$base/api/media/${Uri.encodeComponent(file)}';

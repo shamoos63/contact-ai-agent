@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { handleIncoming, ensureConversation, sendMessage, addNote, listMessages } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
-import { assistantSettings } from '../assistant/index.js';
+import { assistantSettings, listApprovals, decideApproval } from '../assistant/index.js';
 
 // The Android companion app. It signs in like the dashboard (same cookie) and works as a window onto
 // the owner's own assistant chat: what the owner types, says or photographs in the app goes into the
@@ -147,6 +147,19 @@ device.post('/call-note', (req, res) => {
   res.json({ ok: true, conversationId });
 });
 
+// --- Approvals: everything waiting for the owner's OK, decided with a tap (and an edit if needed) ---
+device.get('/approvals', (req, res) => {
+  const items = listApprovals();
+  res.json({ items, count: items.length });
+});
+
+device.post('/approvals/:id', wrap(async (req, res) => {
+  const approve = req.body?.approve === true || req.body?.decision === 'approve';
+  const r = await decideApproval(String(req.params.id), { approve, text: req.body?.text ?? null });
+  if (!r.ok && r.error && !r.status) return res.status(409).json(r);
+  res.json(r);
+}));
+
 // Things the owner should see as phone notifications: assistant messages to any owner after an id.
 // The first call (no "after") only returns where to start, so old messages don't pop up.
 device.get('/feed', (req, res) => {
@@ -159,5 +172,5 @@ device.get('/feed', (req, res) => {
     ? db.prepare(`SELECT id, conversation_id, text, meta, created_at FROM messages
         WHERE direction = 'out' AND id > ? AND conversation_id IN (${ids.map(() => '?').join(',')}) ORDER BY id LIMIT 50`).all(after, ...ids)
     : [];
-  res.json({ messages: rows.map((m) => ({ ...m, meta: JSON.parse(m.meta || '{}') })), last: Math.max(after, ...rows.map((r) => r.id)) });
+  res.json({ messages: rows.map((m) => ({ ...m, meta: JSON.parse(m.meta || '{}') })), last: Math.max(after, ...rows.map((r) => r.id)), approvals: listApprovals().length });
 });

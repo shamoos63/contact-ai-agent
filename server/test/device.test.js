@@ -141,3 +141,38 @@ test('app: a call note is kept with that customer', async () => {
   const note = mods.db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'note' ORDER BY id DESC LIMIT 1").get(r.body.conversationId);
   assert.equal(note.text, '📞 Call note: Wants a screen repair quote for iPhone 15');
 });
+
+test('app: approvals list what waits for the owner; approve with an edit, or reject', async () => {
+  mods.settings.setSetting('assistant', mods.assistant.normalizeAssistant({ enabled: true, timezone: 'Asia/Damascus', confirm_before_sending: true, owners: [{ name: 'Hisham', phone: '+963944111222' }] }));
+  // A message waiting for "yes".
+  assistantAnswers.push({ action: 'send_message', to: '+963955000111', text: 'see you at 5' });
+  await call('POST', '/app/say', { text: 'send +963955000111 "see you at 5"' });
+  const list = await until(async () => {
+    const r = await call('GET', '/app/approvals');
+    return r.body.count > 0 && r;
+  });
+  const item = list.body.items.find((i) => i.type === 'confirm');
+  assert.equal(item.kind, 'message');
+  assert.equal(item.editable, true);
+  assert.match(item.text, /see you at 5/);
+  // Approved with the owner's own words: those are sent, and the chat says so.
+  const before = sent.length;
+  const ok = await call('POST', `/app/approvals/${item.id}`, { approve: true, text: 'see you at 6 instead' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.ok, true);
+  assert.ok(sent.slice(before).some((s) => s.to === '963955000111@s.whatsapp.net' && s.text === 'see you at 6 instead'));
+  assert.ok(sent.slice(before).some((s) => s.to === '963944111222@s.whatsapp.net' && /Sent to/.test(s.text)));
+  // Gone from the list; deciding again says it was handled.
+  assert.equal((await call('GET', '/app/approvals')).body.items.some((i) => i.id === item.id), false);
+  assert.equal((await call('POST', `/app/approvals/${item.id}`, { approve: true })).status, 409);
+
+  // Rejected: nothing goes out.
+  assistantAnswers.push({ action: 'send_message', to: '+963955000111', text: 'bye' });
+  await call('POST', '/app/say', { text: 'send +963955000111 "bye"' });
+  const second = await until(async () => (await call('GET', '/app/approvals')).body.items.find((i) => i.type === 'confirm'));
+  const n = sent.length;
+  await call('POST', `/app/approvals/${second.id}`, { approve: false });
+  assert.ok(!sent.slice(n).some((s) => s.to === '963955000111@s.whatsapp.net'));
+  assert.ok(sent.slice(n).some((s) => /Cancelled from the app/.test(s.text)));
+  mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
+});

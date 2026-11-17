@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../native.dart';
 import '../theme.dart';
+import 'approvals.dart';
 import 'assistant.dart';
 import 'calls.dart';
 import 'inbox.dart';
@@ -18,6 +19,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _tab = 0;
   String? _noteFor;
+  int _approvals = 0;
 
   @override
   void initState() {
@@ -38,13 +40,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) _checkCallNote();
   }
 
-  // Opened from an "add a call note" notification: go to Calls with that number.
+  // Opened from a notification: "add a call note" goes to Calls, "needs your OK" to Approvals.
   Future<void> _checkCallNote() async {
     final n = await Native.pendingCallNote();
     if (n != null && mounted) setState(() {
       _noteFor = n;
-      _tab = 2;
+      _tab = 3;
     });
+    if (await Native.pendingOpen() == 'approvals' && mounted) setState(() => _tab = 1);
   }
 
   Future<void> _startBackground() async {
@@ -66,6 +69,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final pages = [
       AssistantScreen(onSignedOut: _signedOut),
+      ApprovalsScreen(onCount: (n) {
+        if (n != _approvals && mounted) setState(() => _approvals = n);
+      }),
       InboxScreen(onSignedOut: _signedOut),
       CallsScreen(noteFor: _noteFor, onNoteHandled: () => _noteFor = null),
       SettingsScreen(onSignedOut: _signedOut, onChanged: _startBackground),
@@ -77,11 +83,15 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         height: 68,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.blur_on_rounded), label: 'Agent'),
-          NavigationDestination(icon: Icon(Icons.forum_rounded), label: 'Inbox'),
-          NavigationDestination(icon: Icon(Icons.call_rounded), label: 'Calls'),
-          NavigationDestination(icon: Icon(Icons.tune_rounded), label: 'Settings'),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.blur_on_rounded), label: 'Agent'),
+          NavigationDestination(
+            icon: Badge(isLabelVisible: _approvals > 0, label: Text('$_approvals'), child: const Icon(Icons.task_alt_rounded)),
+            label: 'Approvals',
+          ),
+          const NavigationDestination(icon: Icon(Icons.forum_rounded), label: 'Inbox'),
+          const NavigationDestination(icon: Icon(Icons.call_rounded), label: 'Calls'),
+          const NavigationDestination(icon: Icon(Icons.tune_rounded), label: 'Settings'),
         ],
       ),
     );

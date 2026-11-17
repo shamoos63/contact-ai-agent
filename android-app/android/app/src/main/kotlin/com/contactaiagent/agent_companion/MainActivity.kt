@@ -33,6 +33,7 @@ class MainActivity : FlutterActivity() {
     private var cameraFile: File? = null
     private var permissionResult: MethodChannel.Result? = null
     private var pendingCallNote: String? = null
+    private var pendingOpen: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +47,7 @@ class MainActivity : FlutterActivity() {
 
     private fun readCallNoteIntent(intent: Intent?) {
         intent?.getStringExtra(AgentService.EXTRA_CALL_NOTE)?.let { pendingCallNote = it }
+        intent?.getStringExtra(AgentService.EXTRA_OPEN)?.let { pendingOpen = it }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -102,6 +104,7 @@ class MainActivity : FlutterActivity() {
             "wakeStatus" -> result.success(WakeWordService.status(this))
             "recentCalls" -> result.success(recentCalls())
             "pendingCallNote" -> { result.success(pendingCallNote); pendingCallNote = null }
+            "pendingOpen" -> { result.success(pendingOpen); pendingOpen = null }
             "callLab" -> thread { val r = CallLab.run(this); runOnUiThread { result.success(r) } }
             else -> result.notImplemented()
         }

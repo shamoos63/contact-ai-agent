@@ -1996,3 +1996,108 @@ export function learnFromTeamReply(conversationId, text) {
   const asked = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' AND id < ? ORDER BY id DESC LIMIT 1").get(conversationId, last.id)?.text;
   if (asked && withoutPhoto(asked).trim() && text.length >= 10) saveStyleExample(withoutPhoto(asked), last.text, text);
 }
+
+// --- Approvals in the phone app ---
+// Everything waiting for an owner's OK, in one list: customer answers in draft mode, messages/emails
+// and other actions waiting for "yes", and customer questions the AI couldn't answer.
+const EDITABLE = ['message', 'email', 'answer'];
+function pendingTitle(a, language) {
+  switch (a.kind) {
+    case 'message': return say(language, `WhatsApp to ${a.label}`, `واتساب إلى ${a.label}`);
+    case 'email': return say(language, `Email to ${a.label}`, `إيميل إلى ${a.label}`);
+    case 'answer': return say(language, `Reply to ${a.label}`, `الرد على ${a.label}`);
+    case 'learn': return say(language, `Add to Knowledge: ${a.title}`, `إضافة للمعرفة: ${a.title}`);
+    case 'deadlines': return say(language, `Save ${a.items.length} dates with reminders`, `حفظ ${a.items.length} تواريخ مع تذكير`);
+    case 'skill': return say(language, 'Learn a new rule', 'تعلم قاعدة جديدة');
+    case 'followup': return say(language, `Follow up with ${a.ids.length} customers`, `متابعة ${a.ids.length} زبائن`);
+    case 'review': return say(language, 'Learn from this week\'s chats', 'التعلم من محادثات الأسبوع');
+    case 'forget': return say(language, `Delete ${a.label}`, `حذف ${a.label}`);
+    default: return a.kind;
+  }
+}
+function pendingBody(a) {
+  if (a.kind === 'deadlines') return a.items.map((i) => `• ${i.name}: ${i.date}`).join('\n');
+  if (a.kind === 'learn') return a.content;
+  if (a.kind === 'skill') return a.text;
+  if (a.kind === 'email') return `${a.subject ? `${a.subject}\n\n` : ''}${a.text}`;
+  return a.text || '';
+}
+
+export function listApprovals() {
+  const out = [];
+  const now = Date.now();
+  for (const id of ownerConversationIds()) {
+    const conv = getConversation(id);
+    if (!conv) continue;
+    const language = ownerLanguage(id);
+    const p = conv.meta.assistantPending;
+    const window = ['review', 'followup'].includes(p?.action?.kind) ? 12 * 60 : CONFIRM_MINUTES;
+    if (p?.action && p.action.kind !== 'draft' && now - p.at < window * 60e3) {
+      out.push({ id: `pending-${id}-${p.at}`, type: 'confirm', kind: p.action.kind, title: pendingTitle(p.action, p.language || language), text: pendingBody(p.action), editable: EDITABLE.includes(p.action.kind) && !p.action.voice, at: new Date(p.at).toISOString() });
+    }
+    const q = conv.meta.assistantQuestion;
+    if (q && now - q.at < QUESTION_HOURS * 3600e3) {
+      out.push({ id: `question-${id}-${q.at}`, type: 'question', kind: 'question', title: say(language, `${q.label} asked`, `${q.label} سأل`), text: withoutPhoto(q.question), editable: true, needsText: true, at: new Date(q.at).toISOString() });
+    }
+  }
+  for (const d of listDrafts()) {
+    const customer = getConversation(d.conversation_id);
+    const asked = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(d.conversation_id)?.text || '';
+    out.push({ id: `draft-${d.id}`, type: 'draft', kind: 'draft', title: customer ? customerLabel(customer) : `#${d.conversation_id}`, question: withoutPhoto(asked), text: d.text, editable: true, at: d.created_at ? `${d.created_at.replace(' ', 'T')}Z` : null });
+  }
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+
+// The owner tapped Approve (optionally with their own edited text) or Reject in the app.
+// The result also goes into the owner's assistant chat, so WhatsApp and the app stay in step.
+export async function decideApproval(itemId, { approve, text = null }) {
+  const edited = typeof text === 'string' && text.trim() ? text.trim() : null;
+  let m = /^draft-(\d+)$/.exec(itemId);
+  if (m) {
+    const draftId = Number(m[1]);
+    const r = await decideDraft(draftId, { send: !!approve, text: approve ? edited : null, by: 'app' });
+    if (!r) return { ok: false, error: 'That one was already handled.' };
+    for (const id of ownerConversationIds()) {
+      if (getConversation(id)?.meta?.assistantPending?.action?.draftId === draftId) updateMeta(id, { assistantPending: null });
+    }
+    await afterDraftDecision();
+    return { ok: !r.error, status: r.status, error: r.error || null };
+  }
+  m = /^(pending|question)-(\d+)-(\d+)$/.exec(itemId);
+  if (!m) return { ok: false, error: 'Unknown item' };
+  const convId = Number(m[2]);
+  const conv = getConversation(convId);
+  const owner = conv && ownerOf(conv);
+  if (!owner) return { ok: false, error: 'That chat is no longer an owner chat.' };
+  const language = ownerLanguage(convId);
+  const tell = (body) => sendMessage(convId, body, { sender: 'ai', voice: false, meta: { assistant: true, via: 'app' } });
+  if (m[1] === 'pending') {
+    const p = conv.meta.assistantPending;
+    if (!p?.action || String(p.at) !== m[3]) return { ok: false, error: 'That one was already handled.' };
+    updateMeta(convId, { assistantPending: null });
+    if (!approve) {
+      await tell(say(language, '❌ Cancelled from the app.', '❌ انلغت من التطبيق.'));
+      return { ok: true, status: 'cancelled' };
+    }
+    const action = { ...p.action };
+    if (edited && EDITABLE.includes(action.kind)) {
+      if (action.kind === 'answer') action.answer = edited;
+      action.text = edited;
+    }
+    const result = await carryOut(action, getConversation(convId), owner, p.language || language);
+    await tell(result);
+    return { ok: !/^⚠️/.test(result), status: 'done', result };
+  }
+  const q = conv.meta.assistantQuestion;
+  if (!q || String(q.at) !== m[3]) return { ok: false, error: 'That one was already handled.' };
+  if (!approve) {
+    updateMeta(convId, { assistantQuestion: null });
+    await tell(say(language, `OK, I won't answer ${q.label}. The team can reply from the inbox.`, `تمام، ما رح جاوب ${q.label}. الفريق فيه يرد من الـ inbox.`));
+    return { ok: true, status: 'skipped' };
+  }
+  if (!edited) return { ok: false, error: 'Write the answer first.' };
+  // Sent as the owner wrote it in the app, and remembered for next time.
+  const result = await carryOut({ kind: 'answer', conversationId: q.conversationId, label: q.label, text: edited, question: q.question, answer: edited }, conv, owner, language);
+  await tell(result);
+  return { ok: !/^⚠️/.test(result), status: 'done', result };
+}
