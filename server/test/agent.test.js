@@ -1511,10 +1511,17 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   assert.doesNotMatch(copy, /ابعتلو لنورس/);
   await says('no', null, 'sm14e');
 
+  // "ابعت لـ +963… test": "لـ" is not a name, and the words are sent as written.
+  const plain = await says('ابعت لـ +963 900 000 001 test', { action: 'send_message', to: '+963900000001', text: 'test' }, 'sm14f');
+  assert.match(plain, /واتساب إلى \+963900000001[ :]/);
+  assert.match(plain, /:\n\ntest\n/);
+  await says('no', null, 'sm14g');
+
   // Short plain requests use a template: the point is kept, nothing is added.
   assert.equal(assistant.templateDraft('قلو لغيث انو اليوم رح اتأخر', 'غيث', null, 'Hisham', 'TopTech', 'Arabic', false), 'مرحبا غيث، اليوم رح اتأخر');
   assert.equal(assistant.templateDraft('ابعتلو لنورس صباح الخير وعرفو عن حالك', 'نورس', null, 'Hisham', 'TopTech', 'Arabic', true), 'صباح الخير نورس، معك المساعد الذكي تبع Hisham من TopTech 👋');
   assert.equal(assistant.templateDraft('ابعت لمرتي انو اشتقتلها', '', 'مرتي', 'هشام', 'توب تك', 'Arabic', false), 'اشتقتلك');
+  assert.equal(assistant.templateDraft('ابعت لـ +963900000001 test', '', null, 'هشام', 'توب تك', 'Arabic', false), 'test');
   assert.equal(assistant.templateDraft('قلو لغيث اسألو اذا الطلب جاهز', 'غيث', null, 'هشام', 'توب تك', 'Arabic', false), 'مرحبا غيث، الطلب جاهز؟');
   assert.equal(assistant.normalizeAssistant({ owners: [{ name: 'Hisham', name_ar: 'هشام', phone: '+971501' }], company_ar: 'توب تك' }).company_ar, 'توب تك');
   assert.equal(assistant.tighten('بدي منك تجيب معك الفواتير بكرا، لأنو بحاجة إلو قبل ما نبدأ العمل. شكراً!', 'قلو لغيث يجيب معو الفواتير بكرا'), 'بدي منك تجيب معك الفواتير بكرا.');

@@ -57,11 +57,12 @@ ThemeData buildTheme() {
 
 /// A soft glass card used across the app.
 class Glass extends StatelessWidget {
-  const Glass({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.radius = 20, this.onTap, this.glow});
+  const Glass({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.radius = 20, this.onTap, this.onLongPress, this.glow});
   final Widget child;
   final EdgeInsets padding;
   final double radius;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final Color? glow;
 
   @override
@@ -77,8 +78,8 @@ class Glass extends StatelessWidget {
       // Its own Material, so list rows inside the card keep their tap ripple.
       child: Material(type: MaterialType.transparency, child: child),
     );
-    if (onTap == null) return box;
-    return Material(color: Colors.transparent, child: InkWell(borderRadius: BorderRadius.circular(radius), onTap: onTap, child: box));
+    if (onTap == null && onLongPress == null) return box;
+    return Material(color: Colors.transparent, child: InkWell(borderRadius: BorderRadius.circular(radius), onTap: onTap, onLongPress: onLongPress, child: box));
   }
 }
 

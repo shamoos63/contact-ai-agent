@@ -116,7 +116,7 @@ class AgentService : Service() {
             .setCategory(if (urgent) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_MESSAGE)
             .setColor(0xFF8B5CF6.toInt())
             .setAutoCancel(true)
-            .setContentIntent(openApp(this, null))
+            .setContentIntent(if (question) openApprovals(this) else openApp(this, null))
             .build()
         notify(this, (id % 100000).toInt() + 1000, n)
     }
@@ -216,6 +216,7 @@ class AgentService : Service() {
     companion object {
         private const val TAG = "AgentService"
         const val EXTRA_CALL_NOTE = "call_note_number"
+        const val EXTRA_OPEN = "open_screen"
         private const val CHANNEL_SERVICE = "agent_service"
         private const val CHANNEL_ALERTS = "agent_alerts"
         private const val CHANNEL_MESSAGES = "agent_messages"
@@ -284,6 +285,13 @@ class AgentService : Service() {
             nm.createNotificationChannel(NotificationChannel(CHANNEL_MESSAGES, "Agent messages", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "Reminders, summaries and other messages from your agent"
             })
+        }
+
+        /** Opens the app on the Approvals screen. */
+        fun openApprovals(ctx: Context): PendingIntent {
+            val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(EXTRA_OPEN, "approvals")
+            return PendingIntent.getActivity(ctx, 3, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
 
         fun openApp(ctx: Context, callNoteNumber: String?): PendingIntent {

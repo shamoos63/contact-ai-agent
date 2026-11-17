@@ -177,6 +177,10 @@ class Api {
 
   Future<void> reply(int id, String text) => post('/conversations/$id/messages', {'text': text});
   Future<void> aiReply(int id) => post('/conversations/$id/ai-reply');
+  /// Read state, as the dashboard does when a chat is opened (unread = 0).
+  Future<void> setUnread(int id, int unread) => _guard(() async =>
+      _decode(await http.patch(_u('/conversations/$id'), headers: _headers, body: jsonEncode({'unread': unread}))));
+
   Future<void> setAuto(int id, bool on) => _guard(() async =>
       _decode(await http.patch(_u('/conversations/$id'), headers: _headers, body: jsonEncode({'auto_reply': on}))));
 
@@ -185,6 +189,15 @@ class Api {
 
   Future<void> callNote(String number, String text, {String? name}) =>
       post('/app/call-note', {'number': number, 'text': text, if (name != null) 'name': name});
+
+  /// Everything waiting for the owner's OK.
+  Future<List<Map<String, dynamic>>> approvals() async {
+    final r = await get('/app/approvals') as Map;
+    return ((r['items'] as List?) ?? []).map((e) => (e as Map).cast<String, dynamic>()).toList();
+  }
+
+  Future<Map<String, dynamic>> decide(String id, {required bool approve, String? text}) async =>
+      ((await post('/app/approvals/${Uri.encodeComponent(id)}', {'approve': approve, if (text != null) 'text': text})) as Map).cast<String, dynamic>();
 
   Future<Map<String, dynamic>> stats() async => (await get('/stats') as Map).cast<String, dynamic>();
 
