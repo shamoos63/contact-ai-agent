@@ -442,7 +442,10 @@ export function templateDraft(said, name, relation, who, company, language, intr
   const point = pointOf(said, name, relation).replace(/[.!]+$/, '').trim();
   const words = point.split(/\s+/).filter(Boolean);
   const ar = language === 'Arabic';
-  if (ar !== /[؀-ۿ]/.test(point) && point) return null;
+  // Words in the other language ("ابعت لـ +963… test"): the owner gave the exact words. Send them as they are.
+  if (ar !== /[؀-ۿ]/.test(point) && point) {
+    return words.length <= 8 && !words.some((w) => NEEDS_REWORDING.test(w)) ? point : null;
+  }
   if (words.length > 8 || (!words.length && !intro)) return null;
   // "إني"/"that I" stays: "إني وصلت" -> "وصلت".
   let body = point.replace(/^(إني|اني|إنو|انو)\s+/, '');
@@ -695,10 +698,11 @@ function callAs(word, name) {
 
 // "ابعت لغيث إنو…": the name the owner used, when we don't know them yet.
 const SEND_VERB = /(?:^|\s)(?:(?:ابعتلو|ابعتلها|ابعتله|ابعت|ابعث|بعات|راسل|احكي\s+مع|send(?:\s+a\s+message)?|message|text|tell)\s+(?:to\s+|لـ\s*|ل\s+)?|(?:قول|قلي|خبر|احكي|رسالة|مسج)\s+(?:لـ\s*|ل(?=\p{L}{2,})))(\p{L}{2,})/u;
-const NOT_NAMES = /^(مرحبا|مرحبتين|هلا|اهلا|أهلا|السلام|صباح|مسا|مساء|كيفك|شكرا|رسالة|مسج|مسدج|واتس|واتساب|إنو|انو|إنه|انه|أنه|هلق|بكرا|اليوم|إلي|الي|لي|إله|اله|الها|إلها|كل|الكل|هاد|هاي|a|the|him|her|them|me|that|message|whatsapp|now|today|tomorrow|hi|hello|hey|thanks|good)$/i;
+const NOT_NAMES = /^(لـ|ل|مرحبا|مرحبتين|هلا|اهلا|أهلا|السلام|صباح|مسا|مساء|كيفك|شكرا|رسالة|مسج|مسدج|واتس|واتساب|إنو|انو|إنه|انه|أنه|هلق|بكرا|اليوم|إلي|الي|لي|إله|اله|الها|إلها|كل|الكل|هاد|هاي|a|the|him|her|them|me|that|message|whatsapp|now|today|tomorrow|hi|hello|hey|thanks|good)$/i;
 function nameFromSaid(said) {
   const m = withoutPhoto(said).match(SEND_VERB);
   if (!m) return null;
+  if (/ـ/.test(m[1])) return null; // "لـ" (with the stretch mark) is not a name
   const v = variants(m[1]);
   const name = v[v.length - 1];
   if (NOT_NAMES.test(name) || NOT_NAMES.test(m[1]) || variants(m[1]).some((x) => RELATION.test(x))) return null;
