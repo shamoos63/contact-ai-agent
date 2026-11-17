@@ -233,6 +233,11 @@ export default function Assistant() {
               <input value={a.country || ''} placeholder="e.g. United Arab Emirates" onChange={(e) => setA({ ...a, country: e.target.value })} />
               <small className="muted">Used for prices and local answers when searching online. Empty: taken from the first owner's phone code.</small>
             </label>
+            <label>
+              Company name in Arabic (optional)
+              <input dir="rtl" value={a.company_ar || ''} placeholder="توب تك" onChange={(e) => setA({ ...a, company_ar: e.target.value })} />
+              <small className="muted">Used in Arabic messages the assistant writes for you, so names aren't in English letters.</small>
+            </label>
             <label>Remind me before appointments (minutes)<input type="number" min="0" value={a.event_reminder_minutes} onChange={(e) => setA({ ...a, event_reminder_minutes: e.target.value })} /></label>
             <label>
               Daily summary at (optional)
@@ -324,6 +329,7 @@ export default function Assistant() {
           {owners.map((o, i) => (
             <div key={i} className="team-row">
               <label>Name<input dir="auto" value={o.name} onChange={(e) => setOwner(i, { name: e.target.value })} placeholder="Hisham" /></label>
+              <label>Name in Arabic (optional)<input dir="rtl" value={o.name_ar || ''} onChange={(e) => setOwner(i, { name_ar: e.target.value })} placeholder="هشام" /></label>
               <label>WhatsApp number<input value={o.phone} onChange={(e) => setOwner(i, { phone: e.target.value })} placeholder="+963 944 123 456" /></label>
               <label>Telegram username (optional)<input value={o.telegram || ''} onChange={(e) => setOwner(i, { telegram: e.target.value })} placeholder="@hisham" /></label>
               <div className="row">

@@ -64,6 +64,12 @@ function toAnOwner(target) {
   return d.length >= 7 && (assistantSettings().owners || []).some((o) => o.phone && samePhone(o.phone, d));
 }
 
+// The owner's saved settings (with their Arabic name), from whatever we know about them.
+function ownerRecord(owner) {
+  const list = assistantSettings().owners || [];
+  return list.find((o) => (owner?.phone && o.phone && samePhone(o.phone, owner.phone)) || (owner?.name && o.name === owner.name)) || owner || null;
+}
+
 export function isOwnerConversation(conversationId) {
   return !!ownerOf(getConversation(conversationId));
 }
@@ -71,7 +77,7 @@ export function isOwnerConversation(conversationId) {
 // Keep owner settings tidy when saved from the dashboard.
 export function normalizeAssistant(value) {
   const owners = (value?.owners || [])
-    .map((o) => ({ name: String(o.name || '').trim(), phone: String(o.phone || '').trim(), telegram: String(o.telegram || '').trim(), enabled: o.enabled !== false }))
+    .map((o) => ({ name: String(o.name || '').trim(), name_ar: String(o.name_ar || '').trim().slice(0, 60), phone: String(o.phone || '').trim(), telegram: String(o.telegram || '').trim(), enabled: o.enabled !== false }))
     .filter((o) => o.phone || o.telegram);
   const minutes = Number(value?.event_reminder_minutes);
   const briefing = String(value?.daily_briefing || '').trim();
@@ -86,6 +92,7 @@ export function normalizeAssistant(value) {
     alerts: value?.alerts !== false,
     alert_keywords: typeof value?.alert_keywords === 'string' ? value.alert_keywords.trim() : getSetting('assistant').alert_keywords,
     country: String(value?.country || '').trim().slice(0, 60),
+    company_ar: String(value?.company_ar || '').trim().slice(0, 80),
     owners,
   };
 }
@@ -402,6 +409,12 @@ export function templateDraft(said, name, relation, who, company, language, intr
   if (words.length > 8 || (!words.length && !intro)) return null;
   // "إني"/"that I" stays: "إني وصلت" -> "وصلت".
   let body = point.replace(/^(إني|اني|إنو|انو)\s+/, '');
+  // "اشتقتلها" / "بحبو" talk about them: say it to them ("اشتقتلك", "بحبك").
+  body = body.split(/\s+/).map((w) => (ar && /^(اشتقت|مشتق|مشتاق|بحب|حبيت|بشتاق|بفكر في|ب?اعتذر من|بستنا)/.test(w) ? w.replace(/(لها|لهم|لو|له|ها|هم|و|ه)$/, w.startsWith('بحب') ? 'ك' : (/ل(ها|هم|و|ه)$/.test(w) ? 'لك' : 'ك')) : w)).join(' ');
+  // "اسألو اذا الطلب جاهز" -> "الطلب جاهز؟"
+  let question = false;
+  const ask = body.match(/^(اسأل|اسال|سأل|سال)(و|ه|ها|هم)?\s+(اذا|إذا|إذا كان|اذا كان|ان كان|إن كان|هل)\s+(.+)$/);
+  if (ar && ask) { body = ask[4]; question = true; }
   const pointWords = body.split(/\s+/).filter(Boolean);
   if (pointWords.some((w) => NEEDS_REWORDING.test(w) && !/^(اليوم|شوي|بكرا|هلق|كمان|منيح|تمام|يعني)$/.test(w))) return null;
   const greet = body.match(GREETING)?.[0]?.replace(/[،,!.\s]+$/, '') || '';
@@ -411,7 +424,7 @@ export function templateDraft(said, name, relation, who, company, language, intr
   const named = who && who !== 'the owner' ? who : '';
   const by = company && company !== 'Our Company' ? company : '';
   const introLine = intro ? (ar ? `معك المساعد الذكي${named ? ` تبع ${named}` : ''}${by ? ` من ${by}` : ''} 👋` : `This is ${named ? `${named}'s` : 'the'} AI assistant${by ? ` at ${by}` : ''} 👋`) : '';
-  if (/^(كيفك|كيفكن|شلونك|شو أخبارك|شو اخبارك|كيف الحال|how are you)$/i.test(body)) body += ar ? '؟' : '?';
+  if (question || /^(كيفك|كيفكن|شلونك|شو أخبارك|شو اخبارك|كيف الحال|how are you)$/i.test(body)) body = body.replace(/[؟?]+$/, '') + (ar ? '؟' : '?');
   const top = [head, introLine].filter(Boolean).join(ar ? '، ' : ', ');
   const out = introLine ? [top, body].filter(Boolean).join(' ') : [top, body].filter(Boolean).join(ar ? '، ' : ', ');
   return out || null;
@@ -430,8 +443,10 @@ function keepsPoint(text, said, intro) {
 // Turn the owner's instruction ("tell him how are you and introduce yourself") into the message the
 // recipient actually reads, written by the assistant on the owner's behalf.
 async function composeMessage(cmd, target, owner, language, isEmail) {
-  const company = getSetting('company_name');
-  const who = owner.name || 'the owner';
+  // In an Arabic message, names are written in Arabic when the owner gave them ("هشام", "توب تك").
+  const ar = language === 'Arabic';
+  const company = (ar && assistantSettings().company_ar) || getSetting('company_name');
+  const who = (ar && ownerRecord(owner)?.name_ar) || owner.name || 'the owner';
   let recipient = target.callAs || String(target.label || '').replace(/\s*[(<].*$/, '').trim();
   // "مرتي", "أمي", "my wife": how the owner calls them, not their name. Never greet them with it.
   const relation = variants(recipient).find((v) => RELATION.test(v)) || null;
