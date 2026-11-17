@@ -245,6 +245,8 @@ const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|
 const SPEECH = /(^|\s)(احكي مع|احكي ل|احكيلو|احكيلها|قلو|قله|قلها|قوللو|قول ل|قولي ل|خبر|خبرو|خبرها|بلغ|بلغو|ابعت ل|ابعتلو|ابعتلها|راسل|tell|message|text|let \S+ know)(?=\s|$)/i;
 // Words around a name in "save Nour's number +971…" / "احفظ رقم نور …".
 const SAVE_WORDS = /(^|\s)(please|save|remember|store|add|keep|the|number|phone|mobile|contact|email|of|for|is|as|under|احفظ|احفظلي|خزن|خزنلي|سجل|سجلي|ضيف|خلي|خليلي|عندك|رقم|نمرة|موبايل|تلفون|ايميل|إيميل|هو|هاد|هذا|اسمه|اسمها|باسم)(?=\s|$)|'s(?=\s|$)/gi;
+// The owner correcting a draft: "اسمها ريم مو ريما", "قلها…", "بدل…", "not X, Y".
+const CORRECTION = /(^|\s)(اسم(ه|ها|و|هم)|مو|مش|بدل|بدال|غيّر|غير|صحح|صلّح|خليها|خليه|قلها|قلو|قله|خبرها|خبرو|احكيلها|احكيلو|قولي|قوله|رد عليها|رد عليه|name is|not|instead|change|tell (him|her|them))(?=\s|$)/i;
 const PHONE = /\+?\d[\d\s-]{6,}\d/;
 const PLACEHOLDER = /[\[\]{}<>]|(^|\s)(اسم|المستلم|مستلم|الشخص|شخص|فلان|المرسل\s+إليه|recipient|name|someone|somebody|person|contact|unknown|n\/a|null)(?=\s|$)/i;
 // A phone number in the owner's words, else one read from a photo (not a date like 2026-11-13).
@@ -1047,6 +1049,19 @@ async function reviseText(before, instruction, language) {
 async function act(cmd, conv, owner, language) {
   const tz = timeZone();
   const s = assistantSettings();
+  // "احفظ هالمعلومة" right after correcting a draft: remember what the correction taught
+  // (a name, who someone is, how to address them) as a rule for future answers.
+  const fix = conv.meta.assistantLastCorrection;
+  const pic = conv.meta.assistantPhoto;
+  const web = conv.meta.assistantLastWeb;
+  if (fix && Date.now() - fix.at < CONFIRM_MINUTES * 60e3 && !(pic && pic.at > fix.at) && !(web && web.at > fix.at)
+    && SAVE_THIS.test(withoutPhoto(cmd.said || '')) && !firstUrl(cmd.said || '')) {
+    const rule = await factFromCorrection(fix, owner, language);
+    if (rule) {
+      updateMeta(conv.id, { assistantPending: { action: { kind: 'skill', skill: 'rule', text: rule }, at: Date.now() }, assistantLastCorrection: null });
+      return say(language, `🧩 I'll remember this for future answers:\n${rule}\n\nReply "yes" or "no".`, `🧩 رح اتذكر هالشي بالأجوبة الجاية:\n${rule}\n\nرد "نعم" أو "لا".`);
+    }
+  }
   switch (cmd.action) {
     case 'reminder': {
       const t = needTime(cmd, language);
@@ -1483,6 +1498,18 @@ async function processOwnerMessage(conversationId, messageId = null) {
       if (BARE_NUMBER.test(text)) return await reply(say(language, 'Please reply "yes", "no", or write your own answer.', 'رد "نعم" أو "لا"، أو اكتب جوابك.'));
       if (own) {
         const cmd = await understand(conv, owner, language, text);
+        // "اسمها ريم مو ريما، خبرها أهلاً ريم خانم": a correction of this draft, not a new message to
+        // someone. Fix the draft and show it again.
+        const d = db.prepare("SELECT * FROM drafts WHERE id = ? AND status = 'pending'").get(draftId);
+        if (d && !PHONE.test(own) && (CORRECTION.test(own) || cmd.action === 'send_message')) {
+          const better = await reviseText(d.text, own, language);
+          if (better) {
+            db.prepare('UPDATE drafts SET text = ? WHERE id = ?').run(better, draftId);
+            updateMeta(conversationId, { assistantPending: null, assistantLastCorrection: { said: own, before: d.text, after: better, at: Date.now() } });
+            await offerNextDraft(conversationId);
+            return;
+          }
+        }
         if (['chat', 'help', 'answer_customer'].includes(cmd.action)) {
           const r = await decideDraft(draftId, { send: true, text: withoutPhoto(text), by: owner?.name || true });
           return await finish(!r ? say(language, 'That draft was already handled.', 'هالمسودة انحسمت من قبل.')
@@ -1516,7 +1543,10 @@ async function processOwnerMessage(conversationId, messageId = null) {
       }
       if (plainYes(text) || (YES.has(word) && !BUT.test(own) && !editable)) {
         updateMeta(conversationId, { assistantPending: null });
-        return await reply(await carryOut(pending.action, conv, owner, language));
+        await reply(await carryOut(pending.action, conv, owner, language));
+        // A customer draft that was waiting behind this question comes back.
+        if (getSetting('drafts').enabled) await offerNextDraft(conversationId);
+        return;
       }
       if (NO.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
@@ -1594,6 +1624,22 @@ async function processOwnerMessage(conversationId, messageId = null) {
     stopPresence();
     emit('typing', { conversationId, typing: false });
   }
+}
+
+const SAVE_THIS = /(احفظ|احفظها|احفظو|خزن|تذكر|اتذكر|اتذكرها|سجل|remember|save|keep)\s*(هل|هال|ه|هاد|هاي|هيدي|this|that)?\s*(معلومة|معلومه|المعلومة|المعلومه|معلومات|الشي|شي|info|information|this|that|it)?/i;
+// One lasting fact from the owner's correction, in the owner's language. Only what the correction says.
+async function factFromCorrection(fix, owner, language) {
+  const who = owner?.name || 'the owner';
+  const out = (await chat([
+    { role: 'system', content: [
+      `${who} corrected a reply the assistant wrote. Write the lasting fact the assistant should remember from this correction, as ONE short sentence in ${language}: names (exact spelling), who someone is to ${who}, how to address them.`,
+      `The reply before: «${fix.before}»`,
+      `${who}'s correction: «${fix.said}»`,
+      'Only facts stated in the correction; never invent any. No quotes, no explanation, just the sentence.',
+    ].join('\n') },
+    { role: 'user', content: 'Write it now.' },
+  ], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
+  return out && !CJK.test(out) && out.length <= 300 ? out : null;
 }
 
 // --- Scheduler ---

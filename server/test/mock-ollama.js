@@ -81,6 +81,9 @@ export function startMockOllama() {
         const intro = /introduce yourself|عرفو عن حالك/.test(system.split('Draft:')[0].split('asked you:')[1] || '') ? (system.includes('Write in Arabic') ? 'أهلا، أنا المساعد. ' : 'Hi, I am the assistant. ') : '';
         return res.end(JSON.stringify({ message: { role: 'assistant', content: intro + draft } }));
       }
+      if (system.includes('corrected a reply the assistant wrote')) {
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: "Reem is H's wife; call her Reem Khanum." } }));
+      }
       if (system.includes('You edit a short message before it is sent')) {
         const change = system.match(/The change asked: «([^»]*)»/)[1];
         const before = system.match(/The message: «([^»]*)»/)[1];
