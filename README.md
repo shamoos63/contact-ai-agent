@@ -172,6 +172,7 @@ Under **Assistant**, turn it on, pick your time zone and add the people who may 
 - "I have a meeting with Sami on Thursday at 4": saved as an appointment, with a reminder before it (30 minutes by default).
 - "Tell Mona her order is ready" or "Send +971 50 123 4567 'we're open until 8' at 5pm": a WhatsApp message to a client, found by name among your chats and team people, or by number. Now or at a set time.
 - "Email sami@company.com the new price list: …": sent from your first email account.
+- "Save the domains and dates in this photo and remind me before they expire" (with a screenshot, or typed as `example.com 2027-01-10`): after "yes", each one is saved and you're reminded 30, 7 and 1 days before ("قبل اسبوع" sets your own). "When does example.com expire?" / "ايمت بينتهي example.com؟" answers from what was saved. Only names and dates actually in the photo or text are used.
 - "What do I have tomorrow?", "Cancel #12", "Summary of today".
 
 - "Save Nour +971 50 123 4567" / "احفظ رقم نور ‎+971…‎": remembered for that person only (each owner has their own list, also shown and editable on the page). Later "tell Nour…" uses it; when several people match (two Nours, or a saved Nour and a Nour from your chats), the bot lists them and you reply with the number. "My contacts" lists them and "forget Nour" deletes one. Numbers need their country code, so a message never reaches the wrong country.
