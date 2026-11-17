@@ -122,7 +122,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       bottom: false,
       child: RefreshIndicator(
         onRefresh: _load,
-        child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 100), children: [
+        child: ListView(padding: EdgeInsets.fromLTRB(16, 16, 16, bottomGap(context) + 16), children: [
           const GradientText('Approvals', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
           const Text('What your agent is waiting on you for.', style: TextStyle(color: AppColors.muted)),

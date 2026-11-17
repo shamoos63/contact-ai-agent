@@ -174,3 +174,11 @@ void showInfo(BuildContext context, String text) {
 /// Right-to-left for Arabic text, left-to-right otherwise.
 TextDirection directionOf(String text) =>
     RegExp(r'[؀-ۿ]').hasMatch(text.characters.take(40).toString()) ? TextDirection.rtl : TextDirection.ltr;
+
+/// Space to leave at the bottom of a tab so nothing sits under the app's navigation bar and
+/// Android's own gesture/button bar (edge-to-edge on Android 15). With the keyboard open the
+/// screen is already resized above it, so only a small gap is needed.
+double bottomGap(BuildContext context) {
+  if (MediaQuery.viewInsetsOf(context).bottom > 0) return 8;
+  return MediaQuery.paddingOf(context).bottom + 8;
+}
