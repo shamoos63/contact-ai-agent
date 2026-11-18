@@ -39,10 +39,20 @@ class Native {
   /// A number opened from a "add a call note" notification, once.
   static Future<String?> pendingCallNote() => _ch.invokeMethod<String>('pendingCallNote');
 
+  /// The screen a notification asked to open ("approvals"), once.
+  static Future<String?> pendingOpen() => _ch.invokeMethod<String>('pendingOpen');
+
   /// "Hey <name>": listen on the phone for the wake phrase, then send the command to the agent.
   static Future<void> wakeStart({required String name, required bool speak, required bool onlyCharging}) =>
       _ch.invokeMethod('wakeStart', {'name': name, 'speak': speak, 'onlyCharging': onlyCharging});
   static Future<void> wakeStop() => _ch.invokeMethod('wakeStop');
+
+  /// Whether the phone's traffic goes through a VPN right now (it can block the local network).
+  static Future<bool> vpnActive() async => await _ch.invokeMethod<bool>('vpnActive') ?? false;
+
+  /// The floating assistant panel (over other apps) while "Hey …" works.
+  static Future<void> setOverlay(bool on) => _ch.invokeMethod('setOverlay', {'on': on});
+  static Future<void> openOverlaySettings() => _ch.invokeMethod('openOverlaySettings');
   static Future<Map<String, dynamic>> wakeStatus() async =>
       (await _ch.invokeMapMethod<String, dynamic>('wakeStatus')) ?? {'state': 'off'};
 

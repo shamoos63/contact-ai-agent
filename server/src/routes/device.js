@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { getSetting } from '../settings.js';
 import { handleIncoming, ensureConversation, sendMessage, addNote, listMessages } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
-import { assistantSettings } from '../assistant/index.js';
+import { assistantSettings, listApprovals, decideApproval } from '../assistant/index.js';
 
 // The Android companion app. It signs in like the dashboard (same cookie) and works as a window onto
 // the owner's own assistant chat: what the owner types, says or photographs in the app goes into the
@@ -35,9 +35,17 @@ function ownerFor(req) {
 }
 
 // The owner's assistant chat: the same WhatsApp conversation their own messages to the bot arrive in.
+// WhatsApp may know them by a private id (…@lid) instead of their number, so an existing chat with
+// their phone is used first; only without one is a chat keyed by the number made.
 function ownerIdentity(owner) {
   const digits = digitsOf(owner.phone);
-  return { channel: 'whatsapp', externalId: `${digits}@s.whatsapp.net`, handle: `+${digits}`, name: owner.name || null, convMeta: { phone: `+${digits}` } };
+  // WhatsApp's own id for them (…@lid), where their real WhatsApp messages arrive, wins.
+  const existing = db
+    .prepare("SELECT external_id, meta FROM conversations WHERE channel = 'whatsapp' AND external_id NOT LIKE '%@g.us' AND external_id NOT LIKE '%@s.whatsapp.net' ORDER BY id")
+    .all()
+    .find((c) => samePhone(JSON.parse(c.meta || '{}').phone, digits));
+  const externalId = existing?.external_id || `${digits}@s.whatsapp.net`;
+  return { channel: 'whatsapp', externalId, handle: `+${digits}`, name: owner.name || null, convMeta: { phone: `+${digits}` } };
 }
 
 function ownerConversation(owner) {
@@ -147,6 +155,19 @@ device.post('/call-note', (req, res) => {
   res.json({ ok: true, conversationId });
 });
 
+// --- Approvals: everything waiting for the owner's OK, decided with a tap (and an edit if needed) ---
+device.get('/approvals', (req, res) => {
+  const items = listApprovals();
+  res.json({ items, count: items.length });
+});
+
+device.post('/approvals/:id', wrap(async (req, res) => {
+  const approve = req.body?.approve === true || req.body?.decision === 'approve';
+  const r = await decideApproval(String(req.params.id), { approve, text: req.body?.text ?? null });
+  if (!r.ok && r.error && !r.status) return res.status(409).json(r);
+  res.json(r);
+}));
+
 // Things the owner should see as phone notifications: assistant messages to any owner after an id.
 // The first call (no "after") only returns where to start, so old messages don't pop up.
 device.get('/feed', (req, res) => {
@@ -154,10 +175,10 @@ device.get('/feed', (req, res) => {
     return res.json({ messages: [], last: db.prepare('SELECT MAX(id) AS id FROM messages').get().id || 0 });
   }
   const after = Number(req.query.after) || 0;
-  const ids = owners().map((o) => db.prepare('SELECT id FROM conversations WHERE channel = ? AND external_id = ?').get('whatsapp', `${digitsOf(o.phone)}@s.whatsapp.net`)?.id).filter(Boolean);
+  const ids = owners().map((o) => db.prepare('SELECT id FROM conversations WHERE channel = ? AND external_id = ?').get('whatsapp', ownerIdentity(o).externalId)?.id).filter(Boolean);
   const rows = ids.length
     ? db.prepare(`SELECT id, conversation_id, text, meta, created_at FROM messages
         WHERE direction = 'out' AND id > ? AND conversation_id IN (${ids.map(() => '?').join(',')}) ORDER BY id LIMIT 50`).all(after, ...ids)
     : [];
-  res.json({ messages: rows.map((m) => ({ ...m, meta: JSON.parse(m.meta || '{}') })), last: Math.max(after, ...rows.map((r) => r.id)) });
+  res.json({ messages: rows.map((m) => ({ ...m, meta: JSON.parse(m.meta || '{}') })), last: Math.max(after, ...rows.map((r) => r.id)), approvals: listApprovals().length });
 });

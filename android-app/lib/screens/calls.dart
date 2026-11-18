@@ -117,7 +117,7 @@ class _CallsScreenState extends State<CallsScreen> {
       bottom: false,
       child: RefreshIndicator(
         onRefresh: _load,
-        child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 100), children: [
+        child: ListView(padding: EdgeInsets.fromLTRB(16, 16, 16, bottomGap(context) + 16), children: [
           const GradientText('Calls', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
           _missedCard(),

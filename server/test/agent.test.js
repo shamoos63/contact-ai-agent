@@ -897,6 +897,9 @@ test('photos: the assistant reads a business card, saves the number from it, and
   assert.deepEqual(leadDays('ذكرني قبل اسبوع'), [7]);
   // "remind me tomorrow…" without dates is still a plain reminder.
   assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'x' }, 'ذكرني بكرا الساعة 10 انو الاشتراك بينتهي', 'Arabic').action, 'reminder');
+  // …and its text is the owner's words, not things the model brought in from older messages.
+  assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'بتجديد اشتراك shop-example.com الساعة 10 صباحاً غداً' }, 'ذكرني بكرا الساعة 10 جدد الاشتراك', 'Arabic').text, 'جدد الاشتراك');
+  assert.equal(assistant.fixCommand({ action: 'reminder', when: '2026-11-18T10:00', text: 'call Ahmad' }, 'remind me tomorrow at 10 to call Ahmad', 'English').text, 'call Ahmad');
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
 
@@ -1306,6 +1309,29 @@ test('drafts: new topics wait for the owner, their edits teach the style, approv
   assert.equal(toCustomer().length, n);
   assert.match(toOwner().at(-1), /didn't send it/);
 
+  // A correction of the draft ("her name is…, tell her…") fixes the draft and shows it again: nothing
+  // goes to anyone else. "Save this" then remembers the fact as a rule, and the draft comes back.
+  mods.inbox.handleIncoming({ ...customer, text: 'Who is here?', messageId: 'dr11' });
+  await wait();
+  const draftNow = assistant.listDrafts()[0];
+  const sentBefore = sent.length;
+  assistantAnswers.push({ action: 'send_message', to: 'my wife', text: 'Hello Reem' });
+  mods.inbox.handleIncoming({ ...owner, text: 'her name is Reem not Rima, tell her hello Reem', messageId: 'dr12' });
+  await wait();
+  assert.ok(!sent.slice(sentBefore).some((m) => m.to !== ownerJid));
+  assert.match(mods.db.prepare('SELECT text FROM drafts WHERE id = ?').get(draftNow.id).text, /\(her name is Reem not Rima, tell her hello Reem\)$/);
+  assert.match(toOwner().at(-1), /^✍️ Draft reply/);
+  assistantAnswers.push({ action: 'learn', text: 'this' });
+  mods.inbox.handleIncoming({ ...owner, text: 'save this info', messageId: 'dr13' });
+  await wait();
+  assert.match(toOwner().at(-1), /I'll remember this for future answers:\nReem is H's wife/);
+  mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'dr14' });
+  await wait();
+  assert.ok(mods.db.prepare("SELECT 1 FROM skills WHERE kind = 'rule' AND text LIKE 'Reem is%'").get());
+  assert.ok(toOwner().slice(-2).some((t) => /^✍️ Draft reply/.test(t)));
+  mods.inbox.handleIncoming({ ...owner, text: 'no', messageId: 'dr15' });
+  await wait();
+
   mods.settings.setSetting('drafts', { enabled: false, approvals: 3, hold_message: true });
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
@@ -1485,10 +1511,17 @@ test('smarter assistant: no "who?" loop, names with ل, "yes but…" edits, no m
   assert.doesNotMatch(copy, /ابعتلو لنورس/);
   await says('no', null, 'sm14e');
 
+  // "ابعت لـ +963… test": "لـ" is not a name, and the words are sent as written.
+  const plain = await says('ابعت لـ +963 900 000 001 test', { action: 'send_message', to: '+963900000001', text: 'test' }, 'sm14f');
+  assert.match(plain, /واتساب إلى \+963900000001[ :]/);
+  assert.match(plain, /:\n\ntest\n/);
+  await says('no', null, 'sm14g');
+
   // Short plain requests use a template: the point is kept, nothing is added.
   assert.equal(assistant.templateDraft('قلو لغيث انو اليوم رح اتأخر', 'غيث', null, 'Hisham', 'TopTech', 'Arabic', false), 'مرحبا غيث، اليوم رح اتأخر');
   assert.equal(assistant.templateDraft('ابعتلو لنورس صباح الخير وعرفو عن حالك', 'نورس', null, 'Hisham', 'TopTech', 'Arabic', true), 'صباح الخير نورس، معك المساعد الذكي تبع Hisham من TopTech 👋');
   assert.equal(assistant.templateDraft('ابعت لمرتي انو اشتقتلها', '', 'مرتي', 'هشام', 'توب تك', 'Arabic', false), 'اشتقتلك');
+  assert.equal(assistant.templateDraft('ابعت لـ +963900000001 test', '', null, 'هشام', 'توب تك', 'Arabic', false), 'test');
   assert.equal(assistant.templateDraft('قلو لغيث اسألو اذا الطلب جاهز', 'غيث', null, 'هشام', 'توب تك', 'Arabic', false), 'مرحبا غيث، الطلب جاهز؟');
   assert.equal(assistant.normalizeAssistant({ owners: [{ name: 'Hisham', name_ar: 'هشام', phone: '+971501' }], company_ar: 'توب تك' }).company_ar, 'توب تك');
   assert.equal(assistant.tighten('بدي منك تجيب معك الفواتير بكرا، لأنو بحاجة إلو قبل ما نبدأ العمل. شكراً!', 'قلو لغيث يجيب معو الفواتير بكرا'), 'بدي منك تجيب معك الفواتير بكرا.');

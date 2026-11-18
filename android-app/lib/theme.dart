@@ -57,11 +57,12 @@ ThemeData buildTheme() {
 
 /// A soft glass card used across the app.
 class Glass extends StatelessWidget {
-  const Glass({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.radius = 20, this.onTap, this.glow});
+  const Glass({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.radius = 20, this.onTap, this.onLongPress, this.glow});
   final Widget child;
   final EdgeInsets padding;
   final double radius;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final Color? glow;
 
   @override
@@ -77,8 +78,8 @@ class Glass extends StatelessWidget {
       // Its own Material, so list rows inside the card keep their tap ripple.
       child: Material(type: MaterialType.transparency, child: child),
     );
-    if (onTap == null) return box;
-    return Material(color: Colors.transparent, child: InkWell(borderRadius: BorderRadius.circular(radius), onTap: onTap, child: box));
+    if (onTap == null && onLongPress == null) return box;
+    return Material(color: Colors.transparent, child: InkWell(borderRadius: BorderRadius.circular(radius), onTap: onTap, onLongPress: onLongPress, child: box));
   }
 }
 
@@ -173,3 +174,11 @@ void showInfo(BuildContext context, String text) {
 /// Right-to-left for Arabic text, left-to-right otherwise.
 TextDirection directionOf(String text) =>
     RegExp(r'[؀-ۿ]').hasMatch(text.characters.take(40).toString()) ? TextDirection.rtl : TextDirection.ltr;
+
+/// Space to leave at the bottom of a tab so nothing sits under the app's navigation bar and
+/// Android's own gesture/button bar (edge-to-edge on Android 15). With the keyboard open the
+/// screen is already resized above it, so only a small gap is needed.
+double bottomGap(BuildContext context) {
+  if (MediaQuery.viewInsetsOf(context).bottom > 0) return 8;
+  return MediaQuery.paddingOf(context).bottom + 8;
+}

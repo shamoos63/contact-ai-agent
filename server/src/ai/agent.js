@@ -52,7 +52,7 @@ export function buildRulesPrompt(conv = null) {
     `If the knowledge does not answer the question, reply with this message (translated to the customer's language): "${getSetting('fallback_message')}" and add [UNSURE] at the end.`,
   ];
   if (conv?.meta?.group) {
-    parts.push('GROUP CHAT: this is a WhatsApp group. Each message starts with the name of the person who wrote it ("Name: text"). Answer the last person who spoke to you, by name, briefly. Do not answer messages that were meant for other people in the group, and never start your reply with your own name and a colon. Never guess what the group is about or invent plans, meetings or events.');
+    parts.push('GROUP CHAT: this is a WhatsApp group. Each message starts with the name of the person who wrote it ("Name: text"). Answer the last person who spoke to you, by name, briefly. Do not answer messages that were meant for other people in the group, and never start your reply with your own name and a colon. Never guess what the group is about or invent plans, meetings or events. Call people by the name shown before their message, spelled exactly as shown (never translate or change it), unless the owner\'s rules give their name.');
     if (conv.meta.members?.length) parts.push(`People who have written in this group so far: ${conv.meta.members.join(', ')}. If asked who is in the group, name them (you only know the people who have written).`);
     parts.push('In the group, when the knowledge does not answer, say briefly that you don\'t know, in one short line; never say the team will contact them.');
   }

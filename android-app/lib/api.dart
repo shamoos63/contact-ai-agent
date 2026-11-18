@@ -126,14 +126,64 @@ class Api {
     if (set == null) throw ApiError('The agent did not start a session');
     cookie = set.split(';').first;
     await _save();
+    await _remember(base);
   }
 
+  /// Signs out at once: the session is forgotten on the phone first; telling the agent happens in
+  /// the background and never waits more than a few seconds (it may be unreachable).
   Future<void> signOut() async {
-    try {
-      await post('/logout');
-    } catch (_) {}
+    final old = cookie;
     cookie = null;
     await _save();
+    if (old != null && base.isNotEmpty) {
+      http.post(_u('/logout'), headers: {'Cookie': old}).timeout(const Duration(seconds: 3)).then((_) {}, onError: (_) {});
+    }
+  }
+
+  // --- The agent's address ---
+
+  /// Up to 3 addresses that worked before, newest first.
+  Future<List<String>> recentServers() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getStringList('recent_servers') ?? (base.isEmpty ? [] : [base]);
+  }
+
+  Future<void> _remember(String server) async {
+    final p = await SharedPreferences.getInstance();
+    final list = [server, ...(p.getStringList('recent_servers') ?? []).where((s) => s != server)].take(3).toList();
+    await p.setStringList('recent_servers', list);
+  }
+
+  /// Tries an address with this phone's sign-in: 'ok' (reachable and signed in), 'signin' (reachable,
+  /// but this sign-in isn't valid there). Throws ApiError with a plain reason when it can't be reached.
+  Future<String> checkServer(String server) async {
+    final url = normalizeServer(server);
+    try {
+      final h = await http.get(Uri.parse('$url/health')).timeout(const Duration(seconds: 5));
+      if (h.statusCode != 200) throw ApiError('$url answered, but it isn\'t the agent dashboard.');
+      final me = await http.get(Uri.parse('$url/api/me'), headers: authHeaders).timeout(const Duration(seconds: 5));
+      return me.statusCode == 200 ? 'ok' : 'signin';
+    } on ApiError {
+      rethrow;
+    } catch (_) {
+      throw ApiError("Can't reach $url. Check the address, that the computer is on, and that the phone is on the same Wi-Fi (a VPN can block it).");
+    }
+  }
+
+  /// Use another address from now on (after checkServer said 'ok').
+  Future<void> switchServer(String server) async {
+    base = normalizeServer(server);
+    await _save();
+    await _remember(base);
+  }
+
+  /// Point at an address where the user has to sign in again (keeps the address, forgets the session).
+  Future<void> useServerAndSignOut(String server) async {
+    final old = cookie;
+    base = normalizeServer(server);
+    cookie = null;
+    await _save();
+    if (old != null) http.post(_u('/logout'), headers: {'Cookie': old}).timeout(const Duration(seconds: 3)).then((_) {}, onError: (_) {});
   }
 
   Future<OwnersInfo> owners() async {
@@ -177,6 +227,10 @@ class Api {
 
   Future<void> reply(int id, String text) => post('/conversations/$id/messages', {'text': text});
   Future<void> aiReply(int id) => post('/conversations/$id/ai-reply');
+  /// Read state, as the dashboard does when a chat is opened (unread = 0).
+  Future<void> setUnread(int id, int unread) => _guard(() async =>
+      _decode(await http.patch(_u('/conversations/$id'), headers: _headers, body: jsonEncode({'unread': unread}))));
+
   Future<void> setAuto(int id, bool on) => _guard(() async =>
       _decode(await http.patch(_u('/conversations/$id'), headers: _headers, body: jsonEncode({'auto_reply': on}))));
 
@@ -185,6 +239,15 @@ class Api {
 
   Future<void> callNote(String number, String text, {String? name}) =>
       post('/app/call-note', {'number': number, 'text': text, if (name != null) 'name': name});
+
+  /// Everything waiting for the owner's OK.
+  Future<List<Map<String, dynamic>>> approvals() async {
+    final r = await get('/app/approvals') as Map;
+    return ((r['items'] as List?) ?? []).map((e) => (e as Map).cast<String, dynamic>()).toList();
+  }
+
+  Future<Map<String, dynamic>> decide(String id, {required bool approve, String? text}) async =>
+      ((await post('/app/approvals/${Uri.encodeComponent(id)}', {'approve': approve, if (text != null) 'text': text})) as Map).cast<String, dynamic>();
 
   Future<Map<String, dynamic>> stats() async => (await get('/stats') as Map).cast<String, dynamic>();
 

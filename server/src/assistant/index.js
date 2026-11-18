@@ -99,8 +99,10 @@ export function normalizeAssistant(value) {
 }
 
 const say = (language, en, ar) => (language === 'Arabic' ? ar : en);
-const dueIn = (n, language) => (n < 0 ? say(language, `expired ${-n} days ago`, `منتهي من ${-n} يوم`)
-  : n === 0 ? say(language, 'today', 'اليوم') : say(language, `in ${n} days`, `بعد ${n} يوم`));
+// "يوم", "يومين", "3 أيام", "54 يوم".
+const arDays = (n) => (n === 1 ? 'يوم' : n === 2 ? 'يومين' : n <= 10 ? `${n} أيام` : `${n} يوم`);
+const dueIn = (n, language) => (n < 0 ? say(language, `expired ${-n} day${n === -1 ? '' : 's'} ago`, `منتهي من ${arDays(-n)}`)
+  : n === 0 ? say(language, 'today', 'اليوم') : say(language, `in ${n} day${n === 1 ? '' : 's'}`, `بعد ${arDays(n)}`));
 // "ايمت بينتهي shop.com" names one; "شو اللي قرب ينتهي" doesn't.
 const namedLike = (said) => /\b[a-z0-9-]+\.[a-z]{2,}\b/i.test(said);
 // A question back to the owner. While it is open, "no" cancels instead of starting something new.
@@ -223,6 +225,18 @@ async function understand(conv, owner, language, text, { instruction = false, fr
   return fixCommand(cmd, text, language, seen);
 }
 
+// More than one word (or any name like "shop.com") in the model's text that the owner never wrote.
+function addsWords(out, said) {
+  const mine = nameWords(String(said).replace(/[^\p{L}\p{N}.\s]/gu, ' ')).flatMap(variants).map((w) => w.toLowerCase());
+  const keys = new Set(mine.map(skeleton).filter((k) => k.length >= 2));
+  const extra = nameWords(String(out).replace(/[^\p{L}\p{N}.\s]/gu, ' ')).filter((w) => {
+    const v = variants(w);
+    if (v.some((x) => mine.includes(x.toLowerCase()))) return false;
+    const k = skeleton(v[v.length - 1]);
+    return k.length >= 2 && ![...keys].some((m) => m.includes(k) || k.includes(m));
+  });
+  return extra.some((w) => /\.[a-z]{2,}/i.test(w)) || extra.length > 1;
+}
 const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
 const REMIND_ME = /^\s*(please\s+)?(remind\s+me\s+(to\s+|about\s+|that\s+)?|ذكر(ني|نى)\s*|تذكر(ني|نى)\s*|فكرني\s*)/i;
 const TIME_PHRASE = /[\s,،.]*((يوم\s+)?(بعد\s+)?(بكرا|بكره|بكرة|غدا|غدًا|غداً|اليوم|الأحد|الاحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الاربعاء|الخميس|الجمعة|السبت)|(on\s+)?(today|tomorrow|tonight|sunday|monday|tuesday|wednesday|thursday|friday|saturday))?[\s,،]*(الساعة|الساعه|ع\s*الساعة|at)\s*\d{1,2}([:.]\d{2})?\s*(الصبح|الصباح|صباحا|صباحاً|المسا|المساء|مساء|مساءً|العصر|عصرا|الظهر|ظهرا|بالليل|am|pm|a\.m\.|p\.m\.)?[\s.!]*$/i;
@@ -231,6 +245,8 @@ const RELATIVE = /^\s*(بعد\s+(ساعة|ساعه|ساعتين|نص\s+ساعة|
 const SPEECH = /(^|\s)(احكي مع|احكي ل|احكيلو|احكيلها|قلو|قله|قلها|قوللو|قول ل|قولي ل|خبر|خبرو|خبرها|بلغ|بلغو|ابعت ل|ابعتلو|ابعتلها|راسل|tell|message|text|let \S+ know)(?=\s|$)/i;
 // Words around a name in "save Nour's number +971…" / "احفظ رقم نور …".
 const SAVE_WORDS = /(^|\s)(please|save|remember|store|add|keep|the|number|phone|mobile|contact|email|of|for|is|as|under|احفظ|احفظلي|خزن|خزنلي|سجل|سجلي|ضيف|خلي|خليلي|عندك|رقم|نمرة|موبايل|تلفون|ايميل|إيميل|هو|هاد|هذا|اسمه|اسمها|باسم)(?=\s|$)|'s(?=\s|$)/gi;
+// The owner correcting a draft: "اسمها ريم مو ريما", "قلها…", "بدل…", "not X, Y".
+const CORRECTION = /(^|\s)(اسم(ه|ها|و|هم)|مو|مش|بدل|بدال|غيّر|غير|صحح|صلّح|خليها|خليه|قلها|قلو|قله|خبرها|خبرو|احكيلها|احكيلو|قولي|قوله|رد عليها|رد عليه|name is|not|instead|change|tell (him|her|them))(?=\s|$)/i;
 const PHONE = /\+?\d[\d\s-]{6,}\d/;
 const PLACEHOLDER = /[\[\]{}<>]|(^|\s)(اسم|المستلم|مستلم|الشخص|شخص|فلان|المرسل\s+إليه|recipient|name|someone|somebody|person|contact|unknown|n\/a|null)(?=\s|$)/i;
 // A phone number in the owner's words, else one read from a photo (not a date like 2026-11-13).
@@ -291,6 +307,8 @@ export function fixCommand(cmd, text, language, seen = text) {
   if (cmd.action === 'reminder' || cmd.action === 'schedule') {
     // Chinese, or Arabic for an owner who wrote in English: use the owner's own words instead.
     if (cmd.text && (CJK.test(cmd.text) || (language === 'English' && /[\u0600-\u06FF]/.test(cmd.text)))) cmd.text = null;
+    // The model added things from older messages ("اشتراك shop-example.com"): the owner's own words instead.
+    if (cmd.text && addsWords(cmd.text, text)) cmd.text = null;
     if (!cmd.text) cmd.text = text.replace(REMIND_ME, '').replace(TIME_LEAD, '').trim() || null;
     if (cmd.text) cmd.text = cmd.text.replace(REMIND_ME, '').replace(RELATIVE, '').replace(TIME_LEAD, '').replace(TIME_PHRASE, '').trim() || cmd.text;
   }
@@ -424,7 +442,10 @@ export function templateDraft(said, name, relation, who, company, language, intr
   const point = pointOf(said, name, relation).replace(/[.!]+$/, '').trim();
   const words = point.split(/\s+/).filter(Boolean);
   const ar = language === 'Arabic';
-  if (ar !== /[؀-ۿ]/.test(point) && point) return null;
+  // Words in the other language ("ابعت لـ +963… test"): the owner gave the exact words. Send them as they are.
+  if (ar !== /[؀-ۿ]/.test(point) && point) {
+    return words.length <= 8 && !words.some((w) => NEEDS_REWORDING.test(w)) ? point : null;
+  }
   if (words.length > 8 || (!words.length && !intro)) return null;
   // "إني"/"that I" stays: "إني وصلت" -> "وصلت".
   let body = point.replace(/^(إني|اني|إنو|انو)\s+/, '');
@@ -677,10 +698,11 @@ function callAs(word, name) {
 
 // "ابعت لغيث إنو…": the name the owner used, when we don't know them yet.
 const SEND_VERB = /(?:^|\s)(?:(?:ابعتلو|ابعتلها|ابعتله|ابعت|ابعث|بعات|راسل|احكي\s+مع|send(?:\s+a\s+message)?|message|text|tell)\s+(?:to\s+|لـ\s*|ل\s+)?|(?:قول|قلي|خبر|احكي|رسالة|مسج)\s+(?:لـ\s*|ل(?=\p{L}{2,})))(\p{L}{2,})/u;
-const NOT_NAMES = /^(مرحبا|مرحبتين|هلا|اهلا|أهلا|السلام|صباح|مسا|مساء|كيفك|شكرا|رسالة|مسج|مسدج|واتس|واتساب|إنو|انو|إنه|انه|أنه|هلق|بكرا|اليوم|إلي|الي|لي|إله|اله|الها|إلها|كل|الكل|هاد|هاي|a|the|him|her|them|me|that|message|whatsapp|now|today|tomorrow|hi|hello|hey|thanks|good)$/i;
+const NOT_NAMES = /^(لـ|ل|مرحبا|مرحبتين|هلا|اهلا|أهلا|السلام|صباح|مسا|مساء|كيفك|شكرا|رسالة|مسج|مسدج|واتس|واتساب|إنو|انو|إنه|انه|أنه|هلق|بكرا|اليوم|إلي|الي|لي|إله|اله|الها|إلها|كل|الكل|هاد|هاي|a|the|him|her|them|me|that|message|whatsapp|now|today|tomorrow|hi|hello|hey|thanks|good)$/i;
 function nameFromSaid(said) {
   const m = withoutPhoto(said).match(SEND_VERB);
   if (!m) return null;
+  if (/ـ/.test(m[1])) return null; // "لـ" (with the stretch mark) is not a name
   const v = variants(m[1]);
   const name = v[v.length - 1];
   if (NOT_NAMES.test(name) || NOT_NAMES.test(m[1]) || variants(m[1]).some((x) => RELATION.test(x))) return null;
@@ -842,7 +864,7 @@ async function carryOut(action, conv, owner, language) {
         const day = new Date(Date.parse(`${d.due_date}T00:00:00Z`) - lead * 86400e3).toISOString().slice(0, 10);
         const at = fromLocal(`${day}T10:00`, tz);
         if (at.getTime() <= Date.now()) continue;
-        insertTask({ kind: 'reminder', conv, owner, runAt: at, payload: { language, deadlineId: d.id, text: say(language, `${d.name} expires in ${lead} day${lead === 1 ? '' : 's'} (${d.due_date}). Renew it before then.`, `${d.name} بينتهي بعد ${lead} يوم (${d.due_date}). جدده قبل.`) } });
+        insertTask({ kind: 'reminder', conv, owner, runAt: at, payload: { language, deadlineId: d.id, text: say(language, `${d.name} expires in ${lead} day${lead === 1 ? '' : 's'} (${d.due_date}). Renew it before then.`, `${d.name} بينتهي بعد ${arDays(lead)} (${d.due_date}). جدده قبل.`) } });
         set++;
       }
     }
@@ -1031,6 +1053,19 @@ async function reviseText(before, instruction, language) {
 async function act(cmd, conv, owner, language) {
   const tz = timeZone();
   const s = assistantSettings();
+  // "احفظ هالمعلومة" right after correcting a draft: remember what the correction taught
+  // (a name, who someone is, how to address them) as a rule for future answers.
+  const fix = conv.meta.assistantLastCorrection;
+  const pic = conv.meta.assistantPhoto;
+  const web = conv.meta.assistantLastWeb;
+  if (fix && Date.now() - fix.at < CONFIRM_MINUTES * 60e3 && !(pic && pic.at > fix.at) && !(web && web.at > fix.at)
+    && SAVE_THIS.test(withoutPhoto(cmd.said || '')) && !firstUrl(cmd.said || '')) {
+    const rule = await factFromCorrection(fix, owner, language);
+    if (rule) {
+      updateMeta(conv.id, { assistantPending: { action: { kind: 'skill', skill: 'rule', text: rule }, at: Date.now() }, assistantLastCorrection: null });
+      return say(language, `🧩 I'll remember this for future answers:\n${rule}\n\nReply "yes" or "no".`, `🧩 رح اتذكر هالشي بالأجوبة الجاية:\n${rule}\n\nرد "نعم" أو "لا".`);
+    }
+  }
   switch (cmd.action) {
     case 'reminder': {
       const t = needTime(cmd, language);
@@ -1467,6 +1502,18 @@ async function processOwnerMessage(conversationId, messageId = null) {
       if (BARE_NUMBER.test(text)) return await reply(say(language, 'Please reply "yes", "no", or write your own answer.', 'رد "نعم" أو "لا"، أو اكتب جوابك.'));
       if (own) {
         const cmd = await understand(conv, owner, language, text);
+        // "اسمها ريم مو ريما، خبرها أهلاً ريم خانم": a correction of this draft, not a new message to
+        // someone. Fix the draft and show it again.
+        const d = db.prepare("SELECT * FROM drafts WHERE id = ? AND status = 'pending'").get(draftId);
+        if (d && !PHONE.test(own) && (CORRECTION.test(own) || cmd.action === 'send_message')) {
+          const better = await reviseText(d.text, own, language);
+          if (better) {
+            db.prepare('UPDATE drafts SET text = ? WHERE id = ?').run(better, draftId);
+            updateMeta(conversationId, { assistantPending: null, assistantLastCorrection: { said: own, before: d.text, after: better, at: Date.now() } });
+            await offerNextDraft(conversationId);
+            return;
+          }
+        }
         if (['chat', 'help', 'answer_customer'].includes(cmd.action)) {
           const r = await decideDraft(draftId, { send: true, text: withoutPhoto(text), by: owner?.name || true });
           return await finish(!r ? say(language, 'That draft was already handled.', 'هالمسودة انحسمت من قبل.')
@@ -1500,7 +1547,10 @@ async function processOwnerMessage(conversationId, messageId = null) {
       }
       if (plainYes(text) || (YES.has(word) && !BUT.test(own) && !editable)) {
         updateMeta(conversationId, { assistantPending: null });
-        return await reply(await carryOut(pending.action, conv, owner, language));
+        await reply(await carryOut(pending.action, conv, owner, language));
+        // A customer draft that was waiting behind this question comes back.
+        if (getSetting('drafts').enabled) await offerNextDraft(conversationId);
+        return;
       }
       if (NO.has(word)) {
         updateMeta(conversationId, { assistantPending: null });
@@ -1578,6 +1628,22 @@ async function processOwnerMessage(conversationId, messageId = null) {
     stopPresence();
     emit('typing', { conversationId, typing: false });
   }
+}
+
+const SAVE_THIS = /(احفظ|احفظها|احفظو|خزن|تذكر|اتذكر|اتذكرها|سجل|remember|save|keep)\s*(هل|هال|ه|هاد|هاي|هيدي|this|that)?\s*(معلومة|معلومه|المعلومة|المعلومه|معلومات|الشي|شي|info|information|this|that|it)?/i;
+// One lasting fact from the owner's correction, in the owner's language. Only what the correction says.
+async function factFromCorrection(fix, owner, language) {
+  const who = owner?.name || 'the owner';
+  const out = (await chat([
+    { role: 'system', content: [
+      `${who} corrected a reply the assistant wrote. Write the lasting fact the assistant should remember from this correction, as ONE short sentence in ${language}: names (exact spelling), who someone is to ${who}, how to address them.`,
+      `The reply before: «${fix.before}»`,
+      `${who}'s correction: «${fix.said}»`,
+      'Only facts stated in the correction; never invent any. No quotes, no explanation, just the sentence.',
+    ].join('\n') },
+    { role: 'user', content: 'Write it now.' },
+  ], { temperature: 0 })).trim().replace(/^["«“]|["»”]$/g, '').trim();
+  return out && !CJK.test(out) && out.length <= 300 ? out : null;
 }
 
 // --- Scheduler ---
@@ -1979,4 +2045,109 @@ export function learnFromTeamReply(conversationId, text) {
   if (Date.now() - new Date(`${last.created_at.replace(' ', 'T')}Z`).getTime() > 15 * 60e3) return;
   const asked = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' AND id < ? ORDER BY id DESC LIMIT 1").get(conversationId, last.id)?.text;
   if (asked && withoutPhoto(asked).trim() && text.length >= 10) saveStyleExample(withoutPhoto(asked), last.text, text);
+}
+
+// --- Approvals in the phone app ---
+// Everything waiting for an owner's OK, in one list: customer answers in draft mode, messages/emails
+// and other actions waiting for "yes", and customer questions the AI couldn't answer.
+const EDITABLE = ['message', 'email', 'answer'];
+function pendingTitle(a, language) {
+  switch (a.kind) {
+    case 'message': return say(language, `WhatsApp to ${a.label}`, `واتساب إلى ${a.label}`);
+    case 'email': return say(language, `Email to ${a.label}`, `إيميل إلى ${a.label}`);
+    case 'answer': return say(language, `Reply to ${a.label}`, `الرد على ${a.label}`);
+    case 'learn': return say(language, `Add to Knowledge: ${a.title}`, `إضافة للمعرفة: ${a.title}`);
+    case 'deadlines': return say(language, `Save ${a.items.length} dates with reminders`, `حفظ ${a.items.length} تواريخ مع تذكير`);
+    case 'skill': return say(language, 'Learn a new rule', 'تعلم قاعدة جديدة');
+    case 'followup': return say(language, `Follow up with ${a.ids.length} customers`, `متابعة ${a.ids.length} زبائن`);
+    case 'review': return say(language, 'Learn from this week\'s chats', 'التعلم من محادثات الأسبوع');
+    case 'forget': return say(language, `Delete ${a.label}`, `حذف ${a.label}`);
+    default: return a.kind;
+  }
+}
+function pendingBody(a) {
+  if (a.kind === 'deadlines') return a.items.map((i) => `• ${i.name}: ${i.date}`).join('\n');
+  if (a.kind === 'learn') return a.content;
+  if (a.kind === 'skill') return a.text;
+  if (a.kind === 'email') return `${a.subject ? `${a.subject}\n\n` : ''}${a.text}`;
+  return a.text || '';
+}
+
+export function listApprovals() {
+  const out = [];
+  const now = Date.now();
+  for (const id of ownerConversationIds()) {
+    const conv = getConversation(id);
+    if (!conv) continue;
+    const language = ownerLanguage(id);
+    const p = conv.meta.assistantPending;
+    const window = ['review', 'followup'].includes(p?.action?.kind) ? 12 * 60 : CONFIRM_MINUTES;
+    if (p?.action && p.action.kind !== 'draft' && now - p.at < window * 60e3) {
+      out.push({ id: `pending-${id}-${p.at}`, type: 'confirm', kind: p.action.kind, title: pendingTitle(p.action, p.language || language), text: pendingBody(p.action), editable: EDITABLE.includes(p.action.kind) && !p.action.voice, at: new Date(p.at).toISOString() });
+    }
+    const q = conv.meta.assistantQuestion;
+    if (q && now - q.at < QUESTION_HOURS * 3600e3) {
+      out.push({ id: `question-${id}-${q.at}`, type: 'question', kind: 'question', title: say(language, `${q.label} asked`, `${q.label} سأل`), text: withoutPhoto(q.question), editable: true, needsText: true, at: new Date(q.at).toISOString() });
+    }
+  }
+  for (const d of listDrafts()) {
+    const customer = getConversation(d.conversation_id);
+    const asked = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(d.conversation_id)?.text || '';
+    out.push({ id: `draft-${d.id}`, type: 'draft', kind: 'draft', title: customer ? customerLabel(customer) : `#${d.conversation_id}`, question: withoutPhoto(asked), text: d.text, editable: true, at: d.created_at ? `${d.created_at.replace(' ', 'T')}Z` : null });
+  }
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+
+// The owner tapped Approve (optionally with their own edited text) or Reject in the app.
+// The result also goes into the owner's assistant chat, so WhatsApp and the app stay in step.
+export async function decideApproval(itemId, { approve, text = null }) {
+  const edited = typeof text === 'string' && text.trim() ? text.trim() : null;
+  let m = /^draft-(\d+)$/.exec(itemId);
+  if (m) {
+    const draftId = Number(m[1]);
+    const r = await decideDraft(draftId, { send: !!approve, text: approve ? edited : null, by: 'app' });
+    if (!r) return { ok: false, error: 'That one was already handled.' };
+    for (const id of ownerConversationIds()) {
+      if (getConversation(id)?.meta?.assistantPending?.action?.draftId === draftId) updateMeta(id, { assistantPending: null });
+    }
+    await afterDraftDecision();
+    return { ok: !r.error, status: r.status, error: r.error || null };
+  }
+  m = /^(pending|question)-(\d+)-(\d+)$/.exec(itemId);
+  if (!m) return { ok: false, error: 'Unknown item' };
+  const convId = Number(m[2]);
+  const conv = getConversation(convId);
+  const owner = conv && ownerOf(conv);
+  if (!owner) return { ok: false, error: 'That chat is no longer an owner chat.' };
+  const language = ownerLanguage(convId);
+  const tell = (body) => sendMessage(convId, body, { sender: 'ai', voice: false, meta: { assistant: true, via: 'app' } });
+  if (m[1] === 'pending') {
+    const p = conv.meta.assistantPending;
+    if (!p?.action || String(p.at) !== m[3]) return { ok: false, error: 'That one was already handled.' };
+    updateMeta(convId, { assistantPending: null });
+    if (!approve) {
+      await tell(say(language, '❌ Cancelled from the app.', '❌ انلغت من التطبيق.'));
+      return { ok: true, status: 'cancelled' };
+    }
+    const action = { ...p.action };
+    if (edited && EDITABLE.includes(action.kind)) {
+      if (action.kind === 'answer') action.answer = edited;
+      action.text = edited;
+    }
+    const result = await carryOut(action, getConversation(convId), owner, p.language || language);
+    await tell(result);
+    return { ok: !/^⚠️/.test(result), status: 'done', result };
+  }
+  const q = conv.meta.assistantQuestion;
+  if (!q || String(q.at) !== m[3]) return { ok: false, error: 'That one was already handled.' };
+  if (!approve) {
+    updateMeta(convId, { assistantQuestion: null });
+    await tell(say(language, `OK, I won't answer ${q.label}. The team can reply from the inbox.`, `تمام، ما رح جاوب ${q.label}. الفريق فيه يرد من الـ inbox.`));
+    return { ok: true, status: 'skipped' };
+  }
+  if (!edited) return { ok: false, error: 'Write the answer first.' };
+  // Sent as the owner wrote it in the app, and remembered for next time.
+  const result = await carryOut({ kind: 'answer', conversationId: q.conversationId, label: q.label, text: edited, question: q.question, answer: edited }, conv, owner, language);
+  await tell(result);
+  return { ok: !/^⚠️/.test(result), status: 'done', result };
 }
