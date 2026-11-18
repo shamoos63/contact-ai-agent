@@ -225,6 +225,10 @@ api.put('/settings', wrap(async (req, res) => {
     let value = body[key];
     if (key === 'handoff') value = normalizeHandoff(value);
     if (key === 'assistant') value = normalizeAssistant(value);
+    // Auto answer changed on the dashboard: stamp it so the phone follows this latest change.
+    if (key === 'app' && (value.auto_answer !== before.app?.auto_answer || value.auto_answer_rings !== before.app?.auto_answer_rings)) {
+      value = { ...value, auto_answer_at: Date.now() };
+    }
     if (SECRET_FIELDS[key]) {
       value = { ...before[key], ...value };
       for (const f of SECRET_FIELDS[key]) if (value[f] === MASK) value[f] = before[key][f];

@@ -85,6 +85,11 @@ class MainActivity : FlutterActivity() {
             }
             "stopService" -> { AgentService.stop(this); result.success(null) }
             "serviceRunning" -> result.success(AgentService.running)
+            "autoAnswer" -> AgentService.autoAnswer(this).let { result.success(mapOf("on" to it.on, "rings" to it.rings)) }
+            "setAutoAnswer" -> {
+                AgentService.setAutoAnswer(this, call.argument<Boolean>("on") == true, call.argument<Int>("rings") ?: AgentService.autoAnswer(this).rings)
+                result.success(null)
+            }
             "wakeStart" -> {
                 WakeWordService.configure(
                     this,

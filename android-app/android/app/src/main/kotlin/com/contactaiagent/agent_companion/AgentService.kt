@@ -93,6 +93,7 @@ class AgentService : Service() {
                 }
             }
             lastId = json.optLong("last", lastId)
+            syncAutoAnswer(cfg)
         } catch (e: Exception) {
             Log.w(TAG, "feed: ${e.message}")
         }
@@ -129,7 +130,7 @@ class AgentService : Service() {
 
     private fun listenToCalls() {
         val cfg = config(this) ?: return
-        if (!(cfg.missedCalls || cfg.callNotes) || !canReadCalls()) return
+        if (!(cfg.missedCalls || cfg.callNotes || autoAnswer(this).on) || !canReadCalls()) return
         val tm = getSystemService(TelephonyManager::class.java) ?: return
         if (Build.VERSION.SDK_INT >= 31) {
             val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
@@ -159,9 +160,15 @@ class AgentService : Service() {
 
     private fun onCallState(state: Int) {
         when (state) {
-            TelephonyManager.CALL_STATE_RINGING -> { ringing = true; answered = false }
-            TelephonyManager.CALL_STATE_OFFHOOK -> { if (ringing) answered = true; if (!ringing) answered = true }
+            TelephonyManager.CALL_STATE_RINGING -> {
+                ringing = true; answered = false
+                // Auto answer (off by default): pick up after N rings unless someone answers first.
+                val a = autoAnswer(this)
+                if (a.on) main.postDelayed(answerNow, a.rings * RING_MS)
+            }
+            TelephonyManager.CALL_STATE_OFFHOOK -> { main.removeCallbacks(answerNow); answered = true }
             TelephonyManager.CALL_STATE_IDLE -> {
+                main.removeCallbacks(answerNow)
                 val wasMissed = ringing && !answered
                 val wasCall = answered
                 ringing = false
@@ -199,6 +206,37 @@ class AgentService : Service() {
         }
     }
 
+    private val answerNow = Runnable {
+        if (!ringing || answered || !autoAnswer(this).on) return@Runnable
+        try {
+            if (checkSelfPermission(Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED) return@Runnable
+            @Suppress("DEPRECATION")
+            getSystemService(android.telecom.TelecomManager::class.java)?.acceptRingingCall()
+            Log.i(TAG, "auto answer: picked up")
+        } catch (e: Throwable) {
+            Log.w(TAG, "auto answer failed: ${e.message}")
+        }
+    }
+
+    // The dashboard may have changed auto answer: take the newer of the two; push ours if it's newer.
+    private fun syncAutoAnswer(cfg: Config) {
+        try {
+            val body = request(cfg, "GET", "${cfg.server}/api/app/phone", null) ?: return
+            val server = JSONObject(body)
+            val mine = autoAnswer(this)
+            val at = server.optLong("at")
+            if (at > mine.at) {
+                val changed = server.optBoolean("auto_answer") != mine.on
+                saveAutoAnswer(this, server.optBoolean("auto_answer"), server.optInt("rings", 3), at)
+                if (changed) main.post { stopListeningToCalls(); listenToCalls() }
+            } else if (mine.at > at) {
+                pushAutoAnswer(this)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "auto answer sync: ${e.message}")
+        }
+    }
+
     private data class LastCall(val number: String?, val name: String?, val missed: Boolean, val date: Long)
 
     private fun lastCall(): LastCall? {
@@ -224,6 +262,37 @@ class AgentService : Service() {
         private const val ID_CALL_NOTE = 2
         private const val POLL_MS = 15_000L
         private const val PREFS = "agent_service"
+        private const val RING_MS = 3500L // about one ring
+
+        data class AutoAnswer(val on: Boolean, val rings: Int, val at: Long)
+
+        fun autoAnswer(ctx: Context): AutoAnswer {
+            val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return AutoAnswer(p.getBoolean("autoAnswer", false), p.getInt("autoAnswerRings", 3), p.getLong("autoAnswerAt", 0))
+        }
+
+        fun saveAutoAnswer(ctx: Context, on: Boolean, rings: Int, at: Long) {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("autoAnswer", on).putInt("autoAnswerRings", rings.coerceIn(1, 10)).putLong("autoAnswerAt", at).apply()
+            AutoAnswerTile.refresh(ctx)
+        }
+
+        /** Changed on the phone (switch or tile): save now, tell the dashboard in the background. */
+        fun setAutoAnswer(ctx: Context, on: Boolean, rings: Int = autoAnswer(ctx).rings) {
+            saveAutoAnswer(ctx, on, rings, System.currentTimeMillis())
+            Thread { pushAutoAnswer(ctx) }.start()
+            if (running) start(ctx) // re-register the call listener for the new state
+        }
+
+        fun pushAutoAnswer(ctx: Context) {
+            val cfg = config(ctx) ?: return
+            val a = autoAnswer(ctx)
+            try {
+                request(cfg, "POST", "${cfg.server}/api/app/phone", JSONObject().put("auto_answer", a.on).put("rings", a.rings).put("at", a.at).toString())
+            } catch (e: Exception) {
+                Log.w(TAG, "auto answer push: ${e.message}")
+            }
+        }
 
         @Volatile var running = false
 

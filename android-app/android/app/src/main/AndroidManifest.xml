@@ -65,6 +65,16 @@
             android:foregroundServiceType="microphone" />
         <!-- Not exported: only the app itself or root (over USB) can start the live call test. -->
         <receiver android:name=".LiveCallTestReceiver" android:exported="false" />
+        <service
+            android:name=".AutoAnswerTile"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_agent"
+            android:label="Auto answer"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

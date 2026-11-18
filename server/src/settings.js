@@ -46,6 +46,11 @@ export const DEFAULTS = {
   // The Android companion app on the business phone.
   app: {
     missed_call_reply: false, // message callers on WhatsApp when nobody answered their call
+    // The agent answers calls on the business phone after this many rings (off: calls ring normally).
+    // auto_answer_at: when it was last changed (ms), so the phone and the dashboard follow the latest change.
+    auto_answer: false,
+    auto_answer_rings: 3,
+    auto_answer_at: 0,
     missed_call_cooldown_hours: 12,
     missed_call_en: 'Hi! Sorry we missed your call at {company}. How can we help you? You can write here or send a voice note.',
     missed_call_ar: 'مرحبا! عذراً ما قدرنا نرد على اتصالك. كيف فينا نساعدك؟ فيك تكتبلنا هون أو تبعت رسالة صوتية.',

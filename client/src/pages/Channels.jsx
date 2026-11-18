@@ -29,6 +29,7 @@ export default function Channels() {
       <Telegram status={status.telegram} settings={settings.telegram} save={save} />
       <Email accounts={status.email} reload={load} />
       <Meta status={status.meta} settings={settings.meta} save={save} />
+      <PhoneApp settings={settings.app} save={save} />
     </div>
   );
 }
@@ -109,6 +110,33 @@ function Telegram({ status, settings, save }) {
         </label>
         <button className="primary" onClick={() => save({ telegram: { token, enabled: true } })}>Save & connect</button>
       </div>
+    </div>
+  );
+}
+
+// The Android companion app on the business phone.
+function PhoneApp({ settings = {}, save }) {
+  const set = (patch) => save({ app: { ...settings, ...patch } });
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3>📱 Phone app (business phone)</h3>
+      </div>
+      <label className="switch">
+        <input type="checkbox" checked={!!settings.auto_answer} onChange={(e) => set({ auto_answer: e.target.checked })} />
+        <span>Auto answer calls</span>
+      </label>
+      <p className="muted small">
+        When on, the agent answers calls on the phone after{' '}
+        <select value={settings.auto_answer_rings || 3} onChange={(e) => set({ auto_answer_rings: Number(e.target.value) })}>
+          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>{' '}
+        rings, so you can still pick up first. When off, calls ring normally. The phone follows the latest change, here or in the app.
+      </p>
+      <label className="switch">
+        <input type="checkbox" checked={!!settings.missed_call_reply} onChange={(e) => set({ missed_call_reply: e.target.checked })} />
+        <span>Missed call → WhatsApp message</span>
+      </label>
     </div>
   );
 }

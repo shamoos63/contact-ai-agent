@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { db } from '../db.js';
-import { getSetting } from '../settings.js';
+import { getSetting, setSetting } from '../settings.js';
 import { handleIncoming, ensureConversation, sendMessage, addNote, listMessages } from '../inbox.js';
 import { handleVoiceNote, handleImage } from '../voice.js';
 import { assistantSettings, listApprovals, decideApproval } from '../assistant/index.js';
@@ -113,6 +113,30 @@ device.post('/photo', upload.single('image'), wrap(async (req, res) => {
 }));
 
 // --- Calls on the business phone ---
+
+// Auto answer: the phone keeps its own copy (works offline) and both sides follow whichever changed
+// it last (by time).
+function phoneSettings() {
+  const s = getSetting('app');
+  return { auto_answer: !!s.auto_answer, rings: Math.min(10, Math.max(1, Number(s.auto_answer_rings) || 3)), at: Number(s.auto_answer_at) || 0 };
+}
+
+device.get('/phone', (req, res) => res.json(phoneSettings()));
+
+device.post('/phone', (req, res) => {
+  const now = phoneSettings();
+  const at = Number(req.body?.at) || Date.now();
+  if (at > now.at) {
+    const s = getSetting('app');
+    setSetting('app', {
+      ...s,
+      auto_answer: req.body?.auto_answer === undefined ? s.auto_answer : !!req.body.auto_answer,
+      auto_answer_rings: req.body?.rings === undefined ? s.auto_answer_rings : Math.min(10, Math.max(1, Number(req.body.rings) || 3)),
+      auto_answer_at: at,
+    });
+  }
+  res.json(phoneSettings());
+});
 
 function callerConversation(number, name) {
   const digits = digitsOf(number);

@@ -29,6 +29,10 @@ class Native {
   static Future<void> startService({required String server, required String cookie, required String? owner, required bool missedCalls, required bool callNotes}) =>
       _ch.invokeMethod('startService', {'server': server, 'cookie': cookie, 'owner': owner, 'missedCalls': missedCalls, 'callNotes': callNotes});
   static Future<void> stopService() => _ch.invokeMethod('stopService');
+
+  /// Auto answer on the business phone (kept on the phone, synced with the dashboard).
+  static Future<Map<String, dynamic>> autoAnswer() async => (await _ch.invokeMapMethod<String, dynamic>('autoAnswer')) ?? {'on': false, 'rings': 3};
+  static Future<void> setAutoAnswer(bool on, int rings) => _ch.invokeMethod('setAutoAnswer', {'on': on, 'rings': rings});
   static Future<bool> serviceRunning() async => await _ch.invokeMethod<bool>('serviceRunning') ?? false;
 
   static Future<List<Map<String, dynamic>>> recentCalls() async {

@@ -189,3 +189,20 @@ test('app: an owner WhatsApp knows by a private id (@lid) keeps one chat with th
   assert.equal(last.conversation_id, lid);
   mods.settings.setSetting('assistant', { ...mods.settings.getSetting('assistant'), enabled: false });
 });
+
+test('app: auto answer follows whichever side changed it last', async () => {
+  let r = await call('GET', '/app/phone');
+  assert.deepEqual(r.body, { auto_answer: false, rings: 3, at: 0 });
+  // The phone switches it on.
+  r = await call('POST', '/app/phone', { auto_answer: true, rings: 4, at: 1000 });
+  assert.deepEqual(r.body, { auto_answer: true, rings: 4, at: 1000 });
+  // An older change from the phone (made offline earlier) doesn't win.
+  r = await call('POST', '/app/phone', { auto_answer: false, at: 500 });
+  assert.equal(r.body.auto_answer, true);
+  // The dashboard switches it off: stamped now, so the phone takes it on its next check.
+  const put = await fetch(`${base}/settings`, { method: 'PUT', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ app: { ...mods.settings.getSetting('app'), auto_answer: false } }) });
+  assert.equal(put.status, 200);
+  r = await call('GET', '/app/phone');
+  assert.equal(r.body.auto_answer, false);
+  assert.ok(r.body.at > 1000);
+});

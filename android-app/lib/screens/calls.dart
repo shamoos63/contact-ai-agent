@@ -21,6 +21,7 @@ class _CallsScreenState extends State<CallsScreen> {
   List<Map<String, dynamic>>? _lab;
   bool _labRunning = false;
   bool? _missedReply;
+  Map<String, dynamic> _auto = const {'on': false, 'rings': 3};
   String? _handled;
 
   @override
@@ -43,6 +44,8 @@ class _CallsScreenState extends State<CallsScreen> {
   }
 
   Future<void> _load() async {
+    final auto = await Native.autoAnswer();
+    if (mounted) setState(() => _auto = auto);
     final perms = await Native.permissions();
     if (perms['phone'] == true) {
       final calls = await Native.recentCalls();
@@ -120,6 +123,8 @@ class _CallsScreenState extends State<CallsScreen> {
         child: ListView(padding: EdgeInsets.fromLTRB(16, 16, 16, bottomGap(context) + 16), children: [
           const GradientText('Calls', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
+          _autoAnswerCard(),
+          const SizedBox(height: 14),
           _missedCard(),
           const SizedBox(height: 14),
           _recentCard(),
@@ -127,6 +132,51 @@ class _CallsScreenState extends State<CallsScreen> {
           _labCard(),
         ]),
       ),
+    );
+  }
+
+  Widget _autoAnswerCard() {
+    final on = _auto['on'] == true;
+    final rings = (_auto['rings'] as num?)?.toInt() ?? 3;
+    Future<void> set(bool v, int r) async {
+      await Native.requestPermissions(['phone']);
+      await Native.setAutoAnswer(v, r);
+      final a = await Native.autoAnswer();
+      if (mounted) setState(() => _auto = a);
+    }
+
+    return Glass(
+      glow: on ? AppColors.cyan : null,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(on ? Icons.phone_callback_rounded : Icons.phone_disabled_rounded, color: on ? AppColors.cyan : AppColors.muted, size: 30),
+          const SizedBox(width: 12),
+          const Expanded(child: Text('Auto answer', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 20))),
+          Transform.scale(scale: 1.25, child: Switch(value: on, onChanged: (v) => set(v, rings))),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+          on ? 'The agent picks up after $rings rings. Answer before that to take the call yourself.' : 'Off: calls ring normally and you pick up yourself.',
+          style: const TextStyle(color: AppColors.muted, fontSize: 13),
+        ),
+        if (on)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(children: [
+              const Text('Rings before answering', style: TextStyle(fontSize: 13)),
+              const Spacer(),
+              DropdownButton<int>(
+                value: rings.clamp(1, 6),
+                underline: const SizedBox(),
+                items: [for (var n = 1; n <= 6; n++) DropdownMenuItem(value: n, child: Text('$n'))],
+                onChanged: (r) => r == null ? null : set(true, r),
+              ),
+            ]),
+          ),
+        const SizedBox(height: 4),
+        const Text('Also in the quick settings (Auto answer tile) and on the dashboard (Channels → Phone app).',
+            style: TextStyle(color: AppColors.muted, fontSize: 11)),
+      ]),
     );
   }
 
