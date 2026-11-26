@@ -1,7 +1,8 @@
 # --- Build the dashboard ---
 FROM node:22-bookworm-slim AS client
 WORKDIR /app/client
-COPY client/package.json client/package-lock.json ./
+COPY client/package.json ./
+COPY client/package-lock.json ./
 RUN npm ci
 COPY client/ ./
 RUN npm run build
@@ -19,7 +20,8 @@ ARG TARGETARCH
 RUN case "$TARGETARCH" in arm64) A=aarch64 ;; *) A=x86_64 ;; esac \
   && curl -fsSL --retry 5 --retry-delay 3 "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_$A.tar.gz" | tar -xz -C /opt \
   && test -x /opt/piper/piper
-COPY server/package.json server/package-lock.json ./
+COPY server/package.json ./
+COPY server/package-lock.json ./
 # The speech engine ships binaries for every OS; keep only Linux to save ~200 MB.
 RUN npm ci --omit=dev \
   && rm -rf node_modules/onnxruntime-node/bin/napi-v*/darwin node_modules/onnxruntime-node/bin/napi-v*/win32
