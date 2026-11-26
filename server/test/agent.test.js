@@ -948,10 +948,10 @@ test('voice: a voice note gets a voice note back, in the right voice', async () 
   mods.inbox.registerVoiceSender('whatsapp', async (conv, audio) => { voices.push(audio); return { externalId: 'v-out' }; });
 
   await handleVoiceNote({ channel: 'whatsapp', externalId: '971500000088@s.whatsapp.net', name: 'Ali', handle: '+971500000088', messageId: 'sv1', buffer: ogg, ext: 'ogg', duration: 1 });
-  await new Promise((r) => setTimeout(r, 1500));
+  await new Promise((r) => setTimeout(r, 3000));
   assert.equal(voices.length, 1);
   assert.equal(voices[0].subarray(0, 4).toString(), 'OggS');
-  assert.deepEqual(texts, ['We are open 9am to 6pm.']); // the text goes too ("also send the written reply")
+  assert.deepEqual(texts, []); // a voice note goes out alone
   assert.match(said(), /We are open 9am to 6pm\.\n\|en_GB-alan-medium\.onnx/);
   const conv = mods.inbox.listConversations({ channel: 'whatsapp' }).find((c) => c.external_id === '971500000088@s.whatsapp.net');
   const out = mods.inbox.listMessages(conv.id).find((m) => m.direction === 'out');
@@ -963,7 +963,7 @@ test('voice: a voice note gets a voice note back, in the right voice', async () 
   mods.inbox.handleIncoming({ channel: 'whatsapp', externalId: '971500000088@s.whatsapp.net', name: 'Ali', handle: '+971500000088', messageId: 'sv2', text: 'What are your opening hours?' });
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(voices.length, 1);
-  assert.equal(texts.length, 2);
+  assert.equal(texts.length, 1);
   mods.settings.setSetting('speak', { ...mods.settings.getSetting('speak'), enabled: false, customers: 'off' });
 });
 
@@ -977,7 +977,7 @@ test('voice: the assistant speaks to its owner, and sends voice notes to others 
   mods.inbox.registerSender('whatsapp', async (conv, text) => texts.push({ to: conv.external_id, text }));
   mods.inbox.registerVoiceSender('whatsapp', async (conv, audio) => { voices.push({ to: conv.external_id, audio }); return { externalId: 'v' + voices.length }; });
   const owner = { channel: 'whatsapp', externalId: '963944909090@s.whatsapp.net', handle: '+963944909090', convMeta: { phone: '+963944909090' }, autoReply: false };
-  const wait = () => new Promise((r) => setTimeout(r, 700));
+  const wait = () => new Promise((r) => setTimeout(r, 1200));
 
   assistantAnswers.push({ action: 'chat', reply: 'أهلين، كيف فيني ساعدك؟' });
   mods.inbox.handleIncoming({ ...owner, text: 'مرحبا', messageId: 'sp1' });
@@ -990,7 +990,7 @@ test('voice: the assistant speaks to its owner, and sends voice notes to others 
   assistantAnswers.push({ action: 'send_message', to: '+971501234321', text: 'Your order is ready' });
   mods.inbox.handleIncoming({ ...owner, text: 'send +971501234321 "Your order is ready" as a voice note', messageId: 'sp2' });
   await wait();
-  assert.match(texts.at(-1).text, /🎤 Voice note to \+971501234321 now, saying:\n\nYour order is ready/);
+  assert.match(said(), /Voice note to 9 7 1 5 0 1 2 3 4 3 2 1 now, saying:.*Your order is ready/);
   mods.inbox.handleIncoming({ ...owner, text: 'yes', messageId: 'sp3' });
   await wait();
   assert.ok(voices.some((v) => v.to === '971501234321@s.whatsapp.net'));

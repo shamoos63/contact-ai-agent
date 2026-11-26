@@ -9,11 +9,12 @@ import { createSource, indexSource, reindexAll, search, invalidateCache, setSour
 import { extractFile, extractUrl } from '../kb/extract.js';
 import { answer } from '../ai/agent.js';
 import * as ollama from '../ai/ollama.js';
+import { listGguf, resolveGguf, ggufFolderLabel } from '../ai/gguf.js';
 import { channelStatus, restart } from '../channels/index.js';
 import { emit } from '../realtime.js';
 import { handOff, normalizeHandoff, handoffSettings } from '../handoff.js';
 import { speechStatus, loadModel } from '../ai/speech.js';
-import { speakStatus, downloadVoice, speak, ensureVoices } from '../ai/tts.js';
+import { speakStatus, downloadVoice, speak, ensureVoices, refreshHabibi } from '../ai/tts.js';
 import { listBackups, backupNow, BACKUP_DIR } from '../backup.js';
 import { listSuggestions, decideSuggestions, reviewChats } from '../assistant/review.js';
 import { ownerConversationIds, listDrafts, decideDraft, afterDraftDecision, learnFromTeamReply } from '../assistant/index.js';
@@ -366,7 +367,10 @@ api.post('/backups', wrap(async (req, res) => {
   res.json({ backups: listBackups(), path: BACKUP_DIR, settings: getSetting('backup') });
 }));
 // --- The AI's own voice ---
-api.get('/speak/status', (req, res) => res.json(speakStatus()));
+api.get('/speak/status', wrap(async (req, res) => {
+  await refreshHabibi();
+  res.json(speakStatus());
+}));
 api.post('/speak/download', wrap(async (req, res) => {
   downloadVoice(String(req.body?.id || '')).catch(() => {});
   res.json(speakStatus());
@@ -382,7 +386,17 @@ api.post('/speech/load', (req, res) => {
   loadModel().catch(() => {});
   res.json({ ok: true });
 });
-api.get('/ai/status', wrap(async (req, res) => res.json(await ollama.status())));
+api.get('/ai/status', wrap(async (req, res) => res.json({
+  ...await ollama.status(),
+  gguf: listGguf(),
+  ggufFolder: ggufFolderLabel(),
+})));
+api.post('/ai/gguf', (req, res) => {
+  const resolved = resolveGguf(req.body?.file);
+  if (!resolved) return res.status(400).json({ error: 'Choose a .gguf file from the models folder.' });
+  const model = ollama.importGguf(resolved, { useWhenReady: req.body?.use !== false });
+  res.json({ ok: true, model });
+});
 api.post('/ai/pull', (req, res) => {
   const model = req.body?.model;
   if (!model) return res.status(400).json({ error: 'Model is required' });

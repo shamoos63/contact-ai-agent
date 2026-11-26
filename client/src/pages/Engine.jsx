@@ -14,6 +14,11 @@ export default function Engine() {
     api('/settings').then(setSettings);
   }, []);
 
+  const ggufReady = engine?.downloads?.some((d) => d.state === 'done' && String(d.model).startsWith('gguf-'));
+  useEffect(() => {
+    if (ggufReady) api('/settings').then(setSettings);
+  }, [ggufReady]);
+
   if (!engine || !settings) return <div className="center muted">Loading…</div>;
 
   const inUse = (name) => [settings.chat_model, settings.embed_model, settings.vision?.enabled && settings.vision.model].filter(Boolean).some((m) => m === name || `${m}:latest` === name);
@@ -136,6 +141,17 @@ export default function Engine() {
         <CustomModel onPull={pull} disabled={!engine.online} />
       </section>
 
+      <GgufCard
+        files={engine.gguf || []}
+        folder={engine.ggufFolder}
+        installed={installed}
+        inUse={inUse}
+        downloading={downloading}
+        disabled={!engine.online}
+        onImport={(file) => act(() => api('/ai/gguf', { method: 'POST', body: { file: file.id } }))}
+        onUse={(model) => use(model, 'chat')}
+      />
+
       <VoiceCard />
 
       <SpeakCard />
@@ -151,6 +167,49 @@ export default function Engine() {
 
       <FilesCard path={engine.modelsPath} />
     </div>
+  );
+}
+
+function GgufCard({ files, folder, installed, inUse, downloading, disabled, onImport, onUse }) {
+  return (
+    <section className="card">
+      <h3><FolderOpen size={16} /> GGUF models</h3>
+      <p className="muted small">
+        Use a model you already downloaded in LM Studio, such as Google Gemma. Those files end in <code>.gguf</code>.
+        Set <code>GGUF_HOST_DIR</code> in the <code>.env</code> file to LM Studio’s models folder and restart Docker,
+        or copy the <code>.gguf</code> file into the project’s <code>gguf</code> folder.
+        Importing copies it into Ollama, so the disk needs that much free space again. Replies switch to it when the copy finishes.
+      </p>
+      <p className="muted small">Looking in <code>{folder}</code></p>
+      {files.length === 0 ? (
+        <p className="muted">No .gguf files found there yet.</p>
+      ) : (
+        <table className="table flat">
+          <thead><tr><th>File</th><th>Size</th><th /></tr></thead>
+          <tbody>
+            {files.map((file) => (
+              <tr key={file.id}>
+                <td>
+                  <strong>{file.name}</strong>
+                  {file.folder && <div className="small muted">{file.folder}</div>}
+                </td>
+                <td>{formatBytes(file.size)}</td>
+                <td className="right nowrap">
+                  {installed(file.model) ? (
+                    inUse(file.model) ? <span className="ok small"><Check size={14} /> In use</span>
+                      : <button onClick={() => onUse(file.model)}>Use this</button>
+                  ) : downloading(file.model) ? (
+                    <span className="muted small">Importing…</span>
+                  ) : (
+                    <button className="primary" disabled={disabled} onClick={() => onImport(file)}>Import and use</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 
@@ -337,8 +396,9 @@ function SpeakCard() {
           <select className="grow" value={s[key]} onChange={(e) => save({ [key]: e.target.value })}>
             {list.map((x) => <option key={x.id} value={x.id}>{x.label}{x.installed ? '' : ' (not downloaded)'}</option>)}
           </select>
+          {cur?.habibi && !v.habibi?.ok && <span className="small muted nowrap">voice server off</span>}
           {cur?.installed
-            ? <button type="button" disabled={!v.piper || !!busy} onClick={() => tryVoice(language)}><Play size={14} /> {busy === language ? '…' : 'Listen'}</button>
+            ? <button type="button" disabled={(cur.habibi ? !v.habibi?.ok : !v.piper) || !!busy} onClick={() => tryVoice(language)}><Play size={14} /> {busy === language ? '…' : 'Listen'}</button>
             : cur?.download && !cur.download.error
               ? <span className="small muted nowrap">{formatBytes(cur.download.loaded)} / {formatBytes(cur.download.total)}</span>
               : <button type="button" onClick={() => api('/speak/download', { method: 'POST', body: { id: s[key] } }).then(setV)}><Download size={14} /> Download (≈ {formatBytes(cur?.size || 0)})</button>}
@@ -354,8 +414,8 @@ function SpeakCard() {
         <span className="ok small">{saved}</span>
       </div>
       <p className="muted small">
-        The AI can answer with voice notes on WhatsApp and Telegram, made on this computer with the free Piper voices. Links, numbers and long
-        answers are always sent as text too. In the assistant chat you can also say "send it to Nour as a voice note" / "ابعتلو فويس".
+        Voice notes on WhatsApp and Telegram use your voice. The written reply is not sent with them unless someone asks
+        (for example "اكتبها" or "write it"), or the switch below is on.
       </p>
       {!v.piper && <div className="alert warn small">The speech engine is not installed yet. Rebuild the dashboard: <code>docker compose up -d --build --no-deps app</code></div>}
       <label className="switch">
@@ -387,7 +447,11 @@ function SpeakCard() {
               <span>Also send the written reply</span>
             </label>
           </div>
-          <small className="muted">The Arabic voice speaks formal Arabic. Voices are kept in <code>data/voices</code>.</small>
+          <small className="muted">
+            {s.voice_ar === 'ar-own-habibi'
+              ? 'Every voice note uses your recording, in Arabic and in English. A question, an apology, a price and a greeting each follow the matching line.'
+              : 'The Piper Arabic voice speaks formal Arabic. Voices are kept in data/voices.'}
+          </small>
         </>
       )}
       {err && <span className="error small">{err}</span>}

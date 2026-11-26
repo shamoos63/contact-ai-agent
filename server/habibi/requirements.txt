@@ -1,0 +1,2 @@
+habibi-tts==0.1.1
+torchaudio==2.8.0

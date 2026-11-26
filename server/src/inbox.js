@@ -5,6 +5,7 @@ import { generateReply } from './ai/agent.js';
 import { afterReply } from './handoff.js';
 import { isOwnerConversation, handleOwnerMessage, askOwnerAbout, alertOwnerIfUrgent, holdForDraft } from './assistant/index.js';
 import { speak, saveVoiceNote } from './ai/tts.js';
+import { askedForText } from './ai/habibi.js';
 import { productPhotosFor } from './catalog.js';
 import { MEDIA_DIR } from './voice.js';
 import fs from 'node:fs';
@@ -99,8 +100,12 @@ export function wantsVoice(conversationId, audience) {
   return !!JSON.parse(last?.meta || '{}').voice;
 }
 
-// Links, numbers, emails and long answers are easier to read than to hear: they always go as text too.
-const needsText = (text) => /https?:\/\/|@\S+\.|\+?\d[\d\s-]{6,}\d/.test(text) || text.length > 600;
+// The written reply accompanies a voice note only when the setting is on, or the last message asked for it.
+function sendTextWithVoice(conversationId) {
+  if (getSetting('speak').also_text) return true;
+  const last = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1").get(conversationId);
+  return askedForText(last?.text);
+}
 
 function conversationRow(id) {
   const c = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
@@ -232,7 +237,8 @@ export async function sendMessage(conversationId, text, { sender = 'agent', meta
   const send = senders.get(conv.channel);
   let externalId = null;
   let error = null;
-  // A spoken reply: a voice note, plus the text when it's wanted or needed. If speaking fails, text only.
+  // A spoken reply is a voice note by itself. The writing is sent too only when asked for.
+  // If speaking fails, the writing goes out on its own so the reply is not lost.
   let spoken = false;
   if (voice && voiceSenders.has(conv.channel)) {
     try {
@@ -245,7 +251,7 @@ export async function sendMessage(conversationId, text, { sender = 'agent', meta
     }
   }
   try {
-    if (spoken && !getSetting('speak').also_text && !needsText(text)) return insertMessage({ conversationId, direction: 'out', sender, text, externalId, meta });
+    if (spoken && !sendTextWithVoice(conversationId)) return insertMessage({ conversationId, direction: 'out', sender, text, externalId, meta });
     if (!send) throw new Error(`Channel "${conv.channel}" is not connected`);
     externalId = (await send(conv, text))?.externalId || externalId;
   } catch (err) {

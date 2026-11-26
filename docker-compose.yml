@@ -11,9 +11,15 @@ services:
       DATA_DIR: /data
       # The search engine the assistant uses for online questions (the searxng service below).
       SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
+      # Your Arabic voice. The Habibi process runs on this Mac; the container calls it here.
+      HABIBI_URL: ${HABIBI_URL:-http://host.docker.internal:8091}
       OLLAMA_MODELS_PATH: the "ollama-models" folder inside your contact-ai-agent project folder
+      # GGUF files (LM Studio). The container lists /gguf; Ollama on this computer opens GGUF_HOST_DIR.
+      GGUF_DIR: /gguf
+      GGUF_HOST_DIR: "${GGUF_HOST_DIR:-${PWD}/gguf}"
     volumes:
       - ./data:/data
+      - "${GGUF_HOST_DIR:-./gguf}:/gguf:ro"
     depends_on:
       - ollama
       - searxng
@@ -24,6 +30,8 @@ services:
     volumes:
       # Model files live next to the project so they are easy to back up or copy to another computer.
       - ./ollama-models:/root/.ollama/models
+      # Same folder the app lists, so the Ollama container can import a .gguf file.
+      - "${GGUF_HOST_DIR:-./gguf}:/gguf:ro"
     environment:
       OLLAMA_KEEP_ALIVE: 24h
       # One reply at a time, and keep both the chat and the search model loaded, so neither has to

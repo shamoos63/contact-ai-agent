@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { getSetting } from '../settings.js';
 import { emit } from '../realtime.js';
+import { HABIBI_VOICE_ID, habibiHealth, habibiWav } from './habibi.js';
 
 // Text-to-speech, fully local: Piper (https://github.com/rhasspy/piper) turns text into speech on
 // this computer, ffmpeg turns that into an Ogg Opus voice note like the ones WhatsApp sends.
@@ -23,7 +24,11 @@ export const VOICES = [
   { id: 'en_US-lessac-medium', language: 'English', label: 'Lessac: American woman', path: 'en/en_US/lessac/medium', size: 63e6 },
   { id: 'ar_JO-kareem-medium', language: 'Arabic', label: 'Kareem: Arabic man (formal Arabic)', path: 'ar/ar_JO/kareem/medium', size: 63e6 },
   { id: 'ar_JO-kareem-low', language: 'Arabic', label: 'Kareem (smaller, faster)', path: 'ar/ar_JO/kareem/low', size: 63e6 },
+  { id: HABIBI_VOICE_ID, language: 'Arabic', label: 'Your voice (Top Tech, Levantine)', habibi: true, size: 0 },
 ];
+
+const HABIBI_CLIPS = path.join(DATA_DIR, 'voices', 'habibi');
+const habibiInstalled = () => fs.existsSync(path.join(HABIBI_CLIPS, 'clips.json'));
 
 const files = (id) => ({ model: path.join(VOICES_DIR, `${id}.onnx`), config: path.join(VOICES_DIR, `${id}.onnx.json`) });
 export const voiceInstalled = (id) => fs.existsSync(files(id).model) && fs.existsSync(files(id).config);
@@ -34,10 +39,22 @@ const downloads = new Map(); // id -> { loaded, total, error }
 export function speakStatus() {
   return {
     piper: piperAvailable(),
+    habibi: habibiState,
     settings: getSetting('speak'),
-    voices: VOICES.map((v) => ({ ...v, installed: voiceInstalled(v.id), download: downloads.get(v.id) || null })),
+    voices: VOICES.map((v) => ({
+      ...v,
+      installed: v.habibi ? habibiInstalled() : voiceInstalled(v.id),
+      download: downloads.get(v.id) || null,
+    })),
     voicesPath: VOICES_DIR,
   };
+}
+
+let habibiState = { ok: false, url: process.env.HABIBI_URL || 'http://127.0.0.1:8091' };
+
+export async function refreshHabibi() {
+  habibiState = await habibiHealth();
+  return habibiState;
 }
 const publish = () => emit('speak', speakStatus());
 
@@ -64,6 +81,7 @@ async function fetchTo(url, dest, onBytes) {
 export function downloadVoice(id) {
   const voice = VOICES.find((v) => v.id === id);
   if (!voice) return Promise.reject(new Error(`Unknown voice ${id}`));
+  if (voice.habibi) return habibiInstalled() ? Promise.resolve() : Promise.reject(new Error('Your Arabic voice clips are not installed.'));
   if (voiceInstalled(id)) return Promise.resolve();
   if (downloads.get(id)?.promise) return downloads.get(id).promise;
   fs.mkdirSync(VOICES_DIR, { recursive: true });
@@ -123,6 +141,11 @@ export const textLanguage = (text) => {
   return ar > en ? 'Arabic' : 'English';
 };
 
+function wavToOgg(wav) {
+  const input = Buffer.isBuffer(wav) ? 'pipe:0' : wav;
+  return run('ffmpeg', ['-loglevel', 'error', '-i', input, '-ac', '1', '-ar', '48000', '-c:a', 'libopus', '-b:a', '32k', '-application', 'voip', '-f', 'ogg', 'pipe:1'], Buffer.isBuffer(wav) ? wav : undefined);
+}
+
 function run(cmd, args, input) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { cwd: path.dirname(cmd) });
@@ -144,20 +167,37 @@ export function speak(text, { language } = {}) {
   const job = queue.then(async () => {
     const s = getSetting('speak');
     const lang = language || textLanguage(text);
-    const id = lang === 'Arabic' ? s.voice_ar : s.voice_en;
+    let id = lang === 'Arabic' ? s.voice_ar : s.voice_en;
+    const said = speakable(text, lang).slice(0, 1200);
+    if (!said) throw new Error('Nothing to say');
+    const speed = Math.min(1.6, Math.max(0.6, Number(s.speed) || 1));
+    // Your voice, for Arabic and English. Never the older Piper voices, even if this is slow.
+    if (s.voice_ar === HABIBI_VOICE_ID && habibiInstalled()) {
+      let lastErr;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const started = Date.now();
+          const wav = await habibiWav(said.slice(0, 450), { speed, clipsDir: path.join(HABIBI_CLIPS, 'clips') });
+          const ogg = await wavToOgg(wav);
+          console.log(`[voice] Spoke ${said.length} characters with your voice in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+          return ogg;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`[voice] Your voice failed (attempt ${attempt}): ${err.message}`);
+        }
+      }
+      throw lastErr;
+    }
     if (!piperAvailable()) throw new Error('The speech engine (Piper) is not installed. Rebuild the Docker image.');
     if (!voiceInstalled(id)) {
       downloadVoice(id).catch(() => {});
       throw new Error(`The voice ${id} is still downloading`);
     }
-    const said = speakable(text, lang).slice(0, 1200);
-    if (!said) throw new Error('Nothing to say');
     const wav = path.join(os.tmpdir(), `tts-${crypto.randomBytes(6).toString('hex')}.wav`);
     const started = Date.now();
     try {
-      const speed = Math.min(1.6, Math.max(0.6, Number(s.speed) || 1));
       await run(piperBin(), ['--model', files(id).model, '--output_file', wav, '--length_scale', String(+(1 / speed).toFixed(2))], said + '\n');
-      const ogg = await run('ffmpeg', ['-loglevel', 'error', '-i', wav, '-ac', '1', '-ar', '48000', '-c:a', 'libopus', '-b:a', '32k', '-application', 'voip', '-f', 'ogg', 'pipe:1']);
+      const ogg = await wavToOgg(wav);
       console.log(`[voice] Spoke ${said.length} characters with ${id} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
       return ogg;
     } finally {
@@ -179,5 +219,5 @@ export function saveVoiceNote(buffer) {
 export function ensureVoices() {
   const s = getSetting('speak');
   if (!s.enabled) return;
-  for (const id of [s.voice_en, s.voice_ar]) if (id && !voiceInstalled(id)) downloadVoice(id).catch(() => {});
+  for (const id of [s.voice_en, s.voice_ar]) if (id && id !== HABIBI_VOICE_ID && !voiceInstalled(id)) downloadVoice(id).catch(() => {});
 }

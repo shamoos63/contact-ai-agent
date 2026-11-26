@@ -1,6 +1,7 @@
 import os from 'node:os';
-import { getSetting } from '../settings.js';
+import { getSetting, setSetting } from '../settings.js';
 import { emit } from '../realtime.js';
+import { modelfileFrom, pathForOllama } from './gguf.js';
 
 function baseUrl() {
   return getSetting('ollama_url').replace(/\/+$/, '');
@@ -254,6 +255,60 @@ export async function pullModel(model) {
   } finally {
     publish(true);
   }
+}
+
+// Copy a .gguf file (from LM Studio or the project's gguf folder) into Ollama so it can be the chat model.
+// useWhenReady selects it for replies once the copy finishes.
+export function importGguf(resolved, { useWhenReady = false } = {}) {
+  const model = resolved.model;
+  if (downloads.get(model)?.state === 'downloading') return model;
+  const ollamaPath = pathForOllama(resolved, getSetting('ollama_url'));
+  const abort = new AbortController();
+  const d = {
+    model, state: 'downloading', status: 'Reading the GGUF file', total: 0, completed: 0,
+    speed: 0, startedAt: Date.now(), finishedAt: null, error: null, abort, layers: new Map(),
+  };
+  downloads.set(model, d);
+  publish(true);
+  console.log(`[ollama] Importing ${resolved.file} as ${model}`);
+  (async () => {
+    try {
+      const res = await fetch(baseUrl() + '/api/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, name: model, modelfile: modelfileFrom(ollamaPath), stream: true }),
+        signal: abort.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`Ollama could not read that GGUF file: ${res.status} ${await res.text()}`);
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let nl;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          const msg = JSON.parse(line);
+          if (msg.error) throw new Error(msg.error);
+          if (msg.status) d.status = msg.status;
+          publish();
+        }
+      }
+      if (d.status !== 'success') throw new Error(d.status ? `Import stopped at: ${d.status}` : 'Import ended before it finished');
+      Object.assign(d, { state: 'done', speed: 0, finishedAt: Date.now() });
+      console.log(`[ollama] ${model} ready`);
+      if (useWhenReady) setSetting('chat_model', model);
+      if (useWhenReady || getSetting('chat_model') === model) warmUp();
+    } catch (err) {
+      const cancelled = abort.signal.aborted;
+      Object.assign(d, { state: cancelled ? 'cancelled' : 'error', error: cancelled ? null : err.message, speed: 0, finishedAt: Date.now() });
+      if (!cancelled) console.error(`[ollama] Import of ${model} failed:`, err.message);
+    } finally {
+      publish(true);
+    }
+  })();
+  return model;
 }
 
 export async function deleteModel(model) {
