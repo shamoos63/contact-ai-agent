@@ -46,7 +46,9 @@ RUN npm config set fetch-retries 5 \
        sleep 15; \
      done \
   && rm -rf node_modules/onnxruntime-node/bin/napi-v*/darwin node_modules/onnxruntime-node/bin/napi-v*/win32
-COPY server/ ./
+COPY server/src ./src
+COPY server/habibi ./habibi
+RUN test -f src/index.js
 COPY --from=client /app/client/dist /app/client/dist
 
 ENV NODE_ENV=production \
