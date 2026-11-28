@@ -104,3 +104,14 @@ export function modelfileFrom(filePath) {
   const quoted = String(filePath).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return `FROM "${quoted}"\n`;
 }
+
+// Current Ollama requires `from` (the GGUF path). Older Ollama reads `modelfile` instead.
+export function ollamaCreateBody(model, filePath) {
+  return {
+    model,
+    name: model,
+    from: filePath,
+    modelfile: modelfileFrom(filePath),
+    stream: true,
+  };
+}

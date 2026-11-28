@@ -1,7 +1,7 @@
 import os from 'node:os';
 import { getSetting, setSetting } from '../settings.js';
 import { emit } from '../realtime.js';
-import { modelfileFrom, pathForOllama } from './gguf.js';
+import { ollamaCreateBody, pathForOllama } from './gguf.js';
 
 function baseUrl() {
   return getSetting('ollama_url').replace(/\/+$/, '');
@@ -276,7 +276,7 @@ export function importGguf(resolved, { useWhenReady = false } = {}) {
       const res = await fetch(baseUrl() + '/api/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, name: model, modelfile: modelfileFrom(ollamaPath), stream: true }),
+        body: JSON.stringify(ollamaCreateBody(model, ollamaPath)),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) throw new Error(`Ollama could not read that GGUF file: ${res.status} ${await res.text()}`);

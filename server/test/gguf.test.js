@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listGguf, modelNameFromFile, modelfileFrom, pathForOllama, resolveGguf } from '../src/ai/gguf.js';
+import { listGguf, modelNameFromFile, modelfileFrom, ollamaCreateBody, pathForOllama, resolveGguf } from '../src/ai/gguf.js';
 
 test('gguf model names stay valid for Ollama', () => {
   assert.equal(modelNameFromFile('google_gemma-4-Q4_K_M.gguf'), 'gguf-google_gemma-4-q4_k_m');
@@ -33,6 +33,12 @@ test('only gguf files inside the configured folder can be imported', () => {
     else process.env.GGUF_DIR = previous;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('creating a model tells Ollama which GGUF file to read', () => {
+  const body = ollamaCreateBody('gguf-gemma', '/gguf/google/gemma-4.gguf');
+  assert.equal(body.from, '/gguf/google/gemma-4.gguf');
+  assert.match(body.modelfile, /^FROM "\/gguf\/google\/gemma-4\.gguf"\n$/);
 });
 
 test('a GGUF on this computer is opened by its real path when Ollama is not in Docker', () => {
