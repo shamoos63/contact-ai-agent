@@ -4,6 +4,11 @@ import path from 'node:path';
 
 // A later shard of a split GGUF. Ollama loads the set from the first file.
 const LATER_SHARD = /-(?!00001-of-)\d{5}-of-\d{5}\.gguf$/i;
+const PROJECTOR = /^mmproj[-.]/i;
+
+export function isProjectorFile(filename) {
+  return PROJECTOR.test(path.basename(filename));
+}
 
 export function modelNameFromFile(filename) {
   const base = path.basename(filename).replace(/\.gguf$/i, '');
@@ -52,7 +57,7 @@ function walk(root, dir, out) {
       continue;
     }
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.gguf')) continue;
-    if (LATER_SHARD.test(entry.name)) continue;
+    if (LATER_SHARD.test(entry.name) || isProjectorFile(entry.name)) continue;
     const rel = path.relative(root.dir, full).split(path.sep).join('/');
     let size = 0;
     try { size = fs.statSync(full).size; } catch { /* listed anyway */ }
@@ -105,13 +110,16 @@ export function modelfileFrom(filePath) {
   return `FROM "${quoted}"\n`;
 }
 
-// Current Ollama requires `from` (the GGUF path). Older Ollama reads `modelfile` instead.
-export function ollamaCreateBody(model, filePath) {
-  return {
-    model,
-    name: model,
-    from: filePath,
-    modelfile: modelfileFrom(filePath),
-    stream: true,
-  };
+// A picture-projector file that belongs with the chat model in the same folder.
+export function projectorBeside(filePath) {
+  if (isProjectorFile(filePath)) return null;
+  let names;
+  try { names = fs.readdirSync(path.dirname(filePath)); } catch { return null; }
+  const found = names.find((name) => isProjectorFile(name) && name.toLowerCase().endsWith('.gguf'));
+  return found ? path.join(path.dirname(filePath), found) : null;
+}
+
+// Ollama names the model itself. The GGUF is uploaded separately and referenced by its digest.
+export function ollamaCreateBody(model, files) {
+  return { model, files, stream: true };
 }

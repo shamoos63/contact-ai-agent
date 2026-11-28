@@ -178,7 +178,7 @@ function GgufCard({ files, folder, installed, inUse, downloading, disabled, onIm
         Use a model you already downloaded in LM Studio, such as Google Gemma. Those files end in <code>.gguf</code>.
         Set <code>GGUF_HOST_DIR</code> in the <code>.env</code> file to LM Studio’s models folder and restart Docker,
         or copy the <code>.gguf</code> file into the project’s <code>gguf</code> folder.
-        Importing copies it into Ollama, so the disk needs that much free space again. Replies switch to it when the copy finishes.
+        Importing copies it into Ollama, so the disk needs that much free space again. The picture file named mmproj, if it is in the same folder, is included with the main model. Replies switch to it when the copy finishes.
       </p>
       <p className="muted small">Looking in <code>{folder}</code></p>
       {files.length === 0 ? (

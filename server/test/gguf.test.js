@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listGguf, modelNameFromFile, modelfileFrom, ollamaCreateBody, pathForOllama, resolveGguf } from '../src/ai/gguf.js';
+import { listGguf, modelNameFromFile, modelfileFrom, ollamaCreateBody, pathForOllama, projectorBeside, resolveGguf } from '../src/ai/gguf.js';
 
 test('gguf model names stay valid for Ollama', () => {
   assert.equal(modelNameFromFile('google_gemma-4-Q4_K_M.gguf'), 'gguf-google_gemma-4-q4_k_m');
@@ -17,6 +17,7 @@ test('only gguf files inside the configured folder can be imported', () => {
   try {
     fs.mkdirSync(path.join(dir, 'google'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'google', 'gemma-4-Q4_K_M.gguf'), 'not a real model');
+    fs.writeFileSync(path.join(dir, 'google', 'mmproj-gemma-4.gguf'), 'projector');
     fs.writeFileSync(path.join(dir, 'google', 'gemma-4-Q4_K_M-00002-of-00002.gguf'), 'shard');
     fs.writeFileSync(path.join(dir, 'notes.txt'), 'no');
     const files = listGguf();
@@ -35,10 +36,24 @@ test('only gguf files inside the configured folder can be imported', () => {
   }
 });
 
-test('creating a model tells Ollama which GGUF file to read', () => {
-  const body = ollamaCreateBody('gguf-gemma', '/gguf/google/gemma-4.gguf');
-  assert.equal(body.from, '/gguf/google/gemma-4.gguf');
-  assert.match(body.modelfile, /^FROM "\/gguf\/google\/gemma-4\.gguf"\n$/);
+test('creating a model points Ollama at the uploaded file digest', () => {
+  const body = ollamaCreateBody('gguf-gemma', { 'gemma-4.gguf': 'sha256:abc' });
+  assert.equal(body.from, undefined);
+  assert.equal(body.files['gemma-4.gguf'], 'sha256:abc');
+  assert.equal(body.model, 'gguf-gemma');
+});
+
+test('the picture file next to a model is imported with it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gguf-proj-'));
+  const model = path.join(dir, 'gemma-4.gguf');
+  fs.writeFileSync(model, 'model');
+  fs.writeFileSync(path.join(dir, 'mmproj-gemma-4.gguf'), 'projector');
+  try {
+    assert.equal(path.basename(projectorBeside(model)), 'mmproj-gemma-4.gguf');
+    assert.equal(projectorBeside(path.join(dir, 'mmproj-gemma-4.gguf')), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a GGUF on this computer is opened by its real path when Ollama is not in Docker', () => {

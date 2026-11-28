@@ -1,7 +1,11 @@
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { Transform } from 'node:stream';
 import { getSetting, setSetting } from '../settings.js';
 import { emit } from '../realtime.js';
-import { ollamaCreateBody, pathForOllama } from './gguf.js';
+import { ollamaCreateBody, projectorBeside } from './gguf.js';
 
 function baseUrl() {
   return getSetting('ollama_url').replace(/\/+$/, '');
@@ -257,12 +261,56 @@ export async function pullModel(model) {
   }
 }
 
+function countBytes(onBytes) {
+  let done = 0;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      done += chunk.length;
+      onBytes(done);
+      callback(null, chunk);
+    },
+  });
+}
+
+function digestFile(filePath, onBytes, signal) {
+  const hash = createHash('sha256');
+  let done = 0;
+  return new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    const stop = () => stream.destroy();
+    signal?.addEventListener('abort', stop, { once: true });
+    stream.on('data', (chunk) => {
+      hash.update(chunk);
+      done += chunk.length;
+      onBytes(done);
+    });
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+// Ollama keeps its own copy of the file, addressed by the sha256 digest.
+async function ensureBlob(filePath, digest, { signal, onBytes }) {
+  const url = `${baseUrl()}/api/blobs/sha256:${digest}`;
+  const head = await fetch(url, { method: 'HEAD', signal });
+  if (head.ok) return;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: createReadStream(filePath).pipe(countBytes(onBytes)),
+    duplex: 'half',
+    signal,
+  });
+  if (!res.ok) throw new Error(`Ollama could not store that GGUF file: ${res.status} ${await res.text()}`);
+}
+
 // Copy a .gguf file (from LM Studio or the project's gguf folder) into Ollama so it can be the chat model.
 // useWhenReady selects it for replies once the copy finishes.
 export function importGguf(resolved, { useWhenReady = false } = {}) {
   const model = resolved.model;
   if (downloads.get(model)?.state === 'downloading') return model;
-  const ollamaPath = pathForOllama(resolved, getSetting('ollama_url'));
+  const projector = projectorBeside(resolved.file);
+  const parts = [resolved.file, projector].filter(Boolean);
   const abort = new AbortController();
   const d = {
     model, state: 'downloading', status: 'Reading the GGUF file', total: 0, completed: 0,
@@ -270,13 +318,35 @@ export function importGguf(resolved, { useWhenReady = false } = {}) {
   };
   downloads.set(model, d);
   publish(true);
-  console.log(`[ollama] Importing ${resolved.file} as ${model}`);
+  console.log(`[ollama] Importing ${resolved.file} as ${model}${projector ? ` with ${path.basename(projector)}` : ''}`);
   (async () => {
     try {
+      const files = {};
+      for (const filePath of parts) {
+        d.status = `Reading ${path.basename(filePath)}`;
+        publish(true);
+        const digest = await digestFile(filePath, (done) => {
+          d.completed = done;
+          publish();
+        }, abort.signal);
+        d.status = `Copying ${path.basename(filePath)} into Ollama`;
+        d.completed = 0;
+        publish(true);
+        await ensureBlob(filePath, digest, {
+          signal: abort.signal,
+          onBytes: (done) => {
+            d.completed = done;
+            publish();
+          },
+        });
+        files[path.basename(filePath)] = `sha256:${digest}`;
+      }
+      d.status = 'Creating the model';
+      publish(true);
       const res = await fetch(baseUrl() + '/api/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ollamaCreateBody(model, ollamaPath)),
+        body: JSON.stringify(ollamaCreateBody(model, files)),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) throw new Error(`Ollama could not read that GGUF file: ${res.status} ${await res.text()}`);
